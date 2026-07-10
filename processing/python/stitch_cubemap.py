@@ -137,6 +137,7 @@ def main():
     parser.add_argument('--poses', required=True, help="Path to poses.json file")
     parser.add_argument('--face', required=True, help="Name of the face being stitched (front, back, left, right, top, bottom)")
     parser.add_argument('--max-dim', type=int, default=1024, help="Max dimension to scale images before stitching")
+    parser.add_argument('--focal-length', type=float, default=None, help="Force a pre-calibrated focal length value")
     args = parser.parse_args()
 
     input_dir = args.input
@@ -211,8 +212,12 @@ def main():
     cx = w_img / 2.0
     cy = h_img / 2.0
 
-    # Calibrate focal length
-    f = find_focal_length(images, poses, cx, cy, w_img)
+    # Calibrate or use pre-calibrated focal length
+    if args.focal_length is not None:
+        f = args.focal_length
+        eprint(f"Using forced pre-calibrated focal length: {f:.2f}px")
+    else:
+        f = find_focal_length(images, poses, cx, cy, w_img)
 
     # Initialize output canvas and accumulator
     canvas = np.zeros((S, S, 3), dtype=np.float64)

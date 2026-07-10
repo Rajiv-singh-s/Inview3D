@@ -30,7 +30,7 @@ export function runCommand(
   args: string[],
   logger: ProjectLogger,
   options: RunOptions = {},
-): Promise<void> {
+): Promise<string> {
   return new Promise((resolve, reject) => {
     logger.info(`$ ${command} ${args.join(' ')}`, { cwd: options.cwd });
     const child = spawn(command, args, {
@@ -40,6 +40,7 @@ export function runCommand(
     });
 
     let stderrTail = '';
+    let fullOutput = '';
     const appendTail = (chunk: string) => {
       stderrTail = (stderrTail + chunk).slice(-4000);
     };
@@ -58,9 +59,14 @@ export function runCommand(
       }, options.timeoutMs);
     }
 
-    child.stdout.on('data', (d: Buffer) => logger.raw(`${command}:stdout`, d.toString()));
+    child.stdout.on('data', (d: Buffer) => {
+      const s = d.toString();
+      fullOutput += s;
+      logger.raw(`${command}:stdout`, s);
+    });
     child.stderr.on('data', (d: Buffer) => {
       const s = d.toString();
+      fullOutput += s;
       appendTail(s);
       logger.raw(`${command}:stderr`, s);
     });
@@ -79,10 +85,14 @@ export function runCommand(
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
       if (code === 0) {
-        resolve();
+        resolve(fullOutput);
       } else {
         reject(
-          new CommandError(`Command "${command}" exited with code ${code}`, code, stderrTail),
+          new CommandError(
+            `Command "${command}" exited with code ${code}`,
+            code,
+            stderrTail,
+          ),
         );
       }
     });

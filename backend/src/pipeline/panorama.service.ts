@@ -70,17 +70,40 @@ export class PanoramaService {
     });
 
     await this.step(projectId, 'stitch-panorama', log, async () => {
-      // Stitch each face independently
+      let focalLength: number | null = null;
+
+      // 1. Stitch FRONT first to calibrate focal length
+      const frontInput = path.join(ws.photos, 'front');
+      const frontOutput = path.join(ws.faces, 'front.jpg');
+      if (fs.existsSync(frontInput)) {
+        log.info(`Stitching face: front (calibrating global focal length)`);
+        const output = await this.stitchFace(frontInput, frontOutput, path.join(ws.root, 'poses.json'), 'front', null, log);
+        
+        // Try parsing focal length from Python output (stderr/stdout)
+        const match = output.match(/Optimized focal length:\s*([\d.]+)/i);
+        if (match) {
+          focalLength = parseFloat(match[1]);
+          log.info(`Calibrated global focal length from front face: ${focalLength}px`);
+        }
+      }
+
+      // 2. Stitch the remaining faces using the calibrated focal length
       let faceIndex = 0;
       for (const face of CUBE_FACES) {
         const faceInput = path.join(ws.photos, face);
         const faceOutput = path.join(ws.faces, `${face}.jpg`);
         
-        // Only run if the face folder exists (which it should)
         if (fs.existsSync(faceInput)) {
-          log.info(`Stitching face: ${face}`);
-          await this.stitchFace(faceInput, faceOutput, path.join(ws.root, 'poses.json'), face, log);
           faceIndex++;
+          // Skip front since it's already stitched
+          if (face === 'front') {
+            const currentProgress = Math.round(10 + (faceIndex / CUBE_FACES.length) * 80);
+            this.projects.update(projectId, { progress: currentProgress });
+            continue;
+          }
+
+          log.info(`Stitching face: ${face}`);
+          await this.stitchFace(faceInput, faceOutput, path.join(ws.root, 'poses.json'), face, focalLength, log);
           const currentProgress = Math.round(10 + (faceIndex / CUBE_FACES.length) * 80);
           this.projects.update(projectId, { progress: currentProgress });
         }
@@ -133,7 +156,14 @@ export class PanoramaService {
     return count;
   }
 
-  private stitchFace(inputDir: string, outputPath: string, posesPath: string, face: string, log: ProjectLogger): Promise<void> {
+  private stitchFace(
+    inputDir: string, 
+    outputPath: string, 
+    posesPath: string, 
+    face: string, 
+    focalLength: number | null,
+    log: ProjectLogger
+  ): Promise<string> {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     const script = path.join(this.app.pipelineScriptsDir, 'stitch_cubemap.py');
     const args = [
@@ -149,6 +179,9 @@ export class PanoramaService {
       '--max-dim',
       String(this.app.stitchMaxDim),
     ];
+    if (focalLength !== null) {
+      args.push('--focal-length', String(focalLength));
+    }
     
     // On Windows, 'python' is the standard executable, whereas 'python3' is common on Unix.
     const primaryCmd = process.platform === 'win32' ? 'python' : 'python3';
