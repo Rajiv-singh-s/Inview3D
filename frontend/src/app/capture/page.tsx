@@ -1,25 +1,31 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CapturedShot, GuidedCapture } from '@/components/capture/GuidedCapture';
-import { api, ApiError } from '@/lib/api';
 
-type Phase = 'intro' | 'capturing' | 'uploading' | 'error';
+type Phase = 'intro' | 'capturing';
+
+// WebGL + camera — client only.
+const CubeCapture = dynamic(
+  () => import('@/components/cube/CubeCapture').then((m) => m.CubeCapture),
+  { ssr: false, loading: () => <p className="text-slate-400">Starting capture…</p> },
+);
 
 /**
  * iOS 13+ gates DeviceOrientationEvent behind an explicit user gesture, so the
  * capture screen can only start from a button press. Other browsers resolve
- * immediately.
+ * immediately; capture still works without a compass via the drag fallback.
  */
 async function requestMotionPermission(): Promise<void> {
   const D = window.DeviceOrientationEvent as unknown as {
     requestPermission?: () => Promise<'granted' | 'denied'>;
   };
   if (typeof D?.requestPermission === 'function') {
-    const result = await D.requestPermission();
-    if (result !== 'granted') {
-      throw new Error('Motion access denied — capture guidance needs the compass.');
+    try {
+      await D.requestPermission();
+    } catch {
+      /* guidance is optional */
     }
   }
 }
@@ -27,119 +33,56 @@ async function requestMotionPermission(): Promise<void> {
 export default function CapturePage() {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('intro');
-  const [shots, setShots] = useState<CapturedShot[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
 
   const start = async () => {
-    try {
-      await requestMotionPermission();
-      setShots([]);
-      setUploadProgress(0);
-      setPhase('capturing');
-    } catch (err) {
-      console.warn(err);
-      setShots([]);
-      setUploadProgress(0);
-      setPhase('capturing');
-    }
+    await requestMotionPermission();
+    setPhase('capturing');
   };
 
-  const addShot = useCallback((shot: CapturedShot | CapturedShot[]) => {
-    setShots((prev) => {
-      if (Array.isArray(shot)) {
-        return [...prev, ...shot];
-      }
-      return [...prev, shot];
-    });
-  }, []);
-
-  const undo = useCallback(() => setShots((prev) => prev.slice(0, -3)), []);
-
-  const finish = async () => {
-    if (shots.length < 4) return;
-    setPhase('uploading');
-    setUploadProgress(0);
-    try {
-      const res = await api.uploadCapture(
-        shots.map((s) => s.blob),
-        `Capture ${new Date().toLocaleString()}`,
-        shots.map((s) => ({ yaw: s.yaw, pitch: s.pitch, face: s.face })),
-        (progress) => setUploadProgress(progress),
-      );
-      router.push(`/processing/${res.id}`);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Unexpected error uploading photos');
-      setPhase('error');
-    }
-  };
-
-  if (phase === 'intro') {
+  if (phase === 'capturing') {
     return (
-      <div className="mx-auto max-w-xl space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold">Capture a photosphere</h1>
-          <p className="mt-2 text-slate-400">
-            Stand in one spot and slowly rotate your phone across the whole sphere.
-            Guide circles show exactly where to aim — photos are taken automatically when you align.
-          </p>
-        </div>
-
-        <ol className="card space-y-3 p-6 text-sm text-slate-300">
-          <li>
-            <strong className="text-white">1.</strong> Stand still — pivot on the spot, don&apos;t
-            walk.
-          </li>
-          <li>
-            <strong className="text-white">2.</strong> Hold the phone upright and rotate slowly in
-            all directions.
-          </li>
-          <li>
-            <strong className="text-white">3.</strong> Aim at each white circle — it auto-captures
-            when you align.
-          </li>
-          <li>
-            <strong className="text-white">4.</strong> Cover all rings (equator, up, down) for a
-            full sphere.
-          </li>
-        </ol>
-
-        <button onClick={start} className="btn-primary w-full">
-          Start capture
-        </button>
-        <p className="text-center text-xs text-slate-500">
-          Requires camera access. On iOS you&apos;ll also be asked for motion access.
-        </p>
-      </div>
-    );
-  }
-
-  if (phase === 'error') {
-    return (
-      <div className="card mx-auto max-w-xl border-red-500/40 bg-red-500/5 p-6">
-        <p className="font-medium text-red-300">Capture failed</p>
-        <p className="mt-1 text-sm text-red-200/80">{error}</p>
-        <div className="mt-4 flex gap-3">
-          <button onClick={finish} className="btn-primary">
-            Retry upload
-          </button>
-          <button onClick={() => setPhase('intro')} className="btn-ghost">
-            Start over
-          </button>
-        </div>
-      </div>
+      <CubeCapture
+        onComplete={(id) => router.push(`/viewer/${id}`)}
+        onCancel={() => setPhase('intro')}
+      />
     );
   }
 
   return (
-    <GuidedCapture
-      shots={shots}
-      onShot={addShot}
-      onUndo={undo}
-      onFinish={finish}
-      onCancel={() => setPhase('intro')}
-      busy={phase === 'uploading'}
-      uploadProgress={uploadProgress}
-    />
+    <div className="mx-auto max-w-xl space-y-8">
+      <div>
+        <h1 className="text-3xl font-bold">Capture a room</h1>
+        <p className="mt-2 text-slate-400">
+          Stand in the middle of the room and slowly turn. The cube around you fills in live as each
+          wall is captured automatically — no shutter button.
+        </p>
+      </div>
+
+      <ol className="card space-y-3 p-6 text-sm text-slate-300">
+        <li>
+          <strong className="text-white">1.</strong> Stand still — pivot on the spot, don&apos;t
+          walk.
+        </li>
+        <li>
+          <strong className="text-white">2.</strong> Point at the wall the guide names and hold
+          steady.
+        </li>
+        <li>
+          <strong className="text-white">3.</strong> Each wall snaps automatically when aligned,
+          sharp, and steady.
+        </li>
+        <li>
+          <strong className="text-white">4.</strong> Cover all four walls, the ceiling and the
+          floor, then finish.
+        </li>
+      </ol>
+
+      <button onClick={start} className="btn-primary w-full">
+        Start capture
+      </button>
+      <p className="text-center text-xs text-slate-500">
+        Requires camera access. On iOS you&apos;ll also be asked for motion access.
+      </p>
+    </div>
   );
 }

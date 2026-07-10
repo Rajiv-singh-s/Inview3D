@@ -1,57 +1,32 @@
 /** Shared frontend types — mirror the backend's public API shapes. */
 
-export type ProjectStatus =
-  | 'uploaded'
-  | 'queued'
-  | 'processing'
-  | 'completed'
-  | 'failed'
-  | 'canceled';
-
-export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-
-export interface PipelineStepState {
-  id: string;
-  label: string;
-  status: StepStatus;
-  startedAt?: string;
-  endedAt?: string;
-  durationMs?: number;
-  error?: string;
-}
+export type ProjectStatus = 'completed' | 'failed';
 
 export interface Project {
   id: string;
   status: ProjectStatus;
-  progress: number;
   createdAt: string;
   updatedAt: string;
   originalName: string;
-  steps: PipelineStepState[];
-  photoCount?: number;
+  faces: string[];
   error?: string;
 }
 
-export interface StatusResponse {
-  id: string;
-  status: ProjectStatus;
-  progress: number;
-  steps: PipelineStepState[];
-  error?: string;
-  updatedAt: string;
-}
+/** The six cube faces, in the order the viewer expects. */
+export type CubeFaceName = 'front' | 'right' | 'back' | 'left' | 'top' | 'bottom';
 
-/** Metadata the cubemap viewer needs. */
+/** Metadata the cubemap viewer needs: which faces exist and where to load them. */
 export interface ViewerMetadata {
   id: string;
   originalName: string;
-  photoCount?: number;
+  /** Faces that were captured and stored. */
+  faces: CubeFaceName[];
   completedAt: string;
 }
 
-export interface CaptureResponse {
+export interface CubeCaptureResponse {
   id: string;
   status: ProjectStatus;
-  photoCount: number;
+  faceCount: number;
   originalName: string;
 }

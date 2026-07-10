@@ -5,17 +5,17 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { formatBytes } from '@/lib/format';
+import type { CubeFace } from '@/components/cube/cubeFaces';
 
-// Photosphere viewer needs WebGL — render client-side only.
-const PhotosphereViewer = dynamic(
-  () => import('@/components/viewer/PhotosphereViewer').then((m) => m.PhotosphereViewer),
+// WebGL — render client-side only.
+const CubeViewer = dynamic(
+  () => import('@/components/cube/CubeViewer').then((m) => m.CubeViewer),
   { ssr: false, loading: () => <ViewerSkeleton /> },
 );
 
 function ViewerSkeleton() {
   return (
-    <div className="grid h-[70vh] w-full place-items-center rounded-2xl border border-slate-800 bg-slate-900">
+    <div className="grid h-[75vh] w-full place-items-center rounded-2xl border border-slate-800 bg-slate-900">
       <p className="text-slate-400">Initializing viewer…</p>
     </div>
   );
@@ -33,14 +33,14 @@ export default function ViewerPage({ params }: { params: Promise<{ id: string }>
   if (isError || !data) {
     return (
       <div className="card p-6">
-        <p className="text-red-300">This project isn&apos;t ready yet.</p>
+        <p className="text-red-300">This room isn&apos;t ready yet.</p>
         <p className="mt-1 text-sm text-slate-400">{(error as Error)?.message}</p>
         <div className="mt-4 flex gap-3">
-          <Link href={`/processing/${id}`} className="btn-ghost">
-            Check processing status
-          </Link>
           <Link href="/projects" className="btn-ghost">
             Back to projects
+          </Link>
+          <Link href="/capture" className="btn-ghost">
+            New capture
           </Link>
         </div>
       </div>
@@ -52,18 +52,14 @@ export default function ViewerPage({ params }: { params: Promise<{ id: string }>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{data.originalName}</h1>
-          <p className="text-sm text-slate-400">
-            Cubemap · {data.photoCount ?? '?'} photos
-          </p>
+          <p className="text-sm text-slate-400">Room cube · {data.faces.length} faces</p>
         </div>
-        <div className="flex gap-3">
-          <Link href="/capture" className="btn-primary">
-            New capture
-          </Link>
-        </div>
+        <Link href="/capture" className="btn-primary">
+          New capture
+        </Link>
       </div>
 
-      <PhotosphereViewer id={id} />
+      <CubeViewer id={id} faces={data.faces as CubeFace[]} />
     </div>
   );
 }

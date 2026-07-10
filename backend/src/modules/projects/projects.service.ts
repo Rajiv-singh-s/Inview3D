@@ -4,13 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { customAlphabet } from 'nanoid';
 import { AppConfig } from '../../config/configuration';
-import {
-  PANORAMA_STEPS,
-  PipelineStepId,
-  PipelineStepState,
-  Project,
-  ProjectStatus,
-} from '../../common/interfaces';
+import { Project, ProjectStatus } from '../../common/interfaces';
 
 const nanoid = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 12);
 
@@ -26,12 +20,9 @@ export class ProjectsService implements OnModuleInit {
   private readonly logger = new Logger(ProjectsService.name);
   private readonly projects = new Map<string, Project>();
   private readonly outputPath: string;
-  private readonly uploadPath: string;
 
   constructor(config: ConfigService) {
-    const app = config.getOrThrow<AppConfig>('app');
-    this.outputPath = app.outputPath;
-    this.uploadPath = app.uploadPath;
+    this.outputPath = config.getOrThrow<AppConfig>('app').outputPath;
   }
 
   /** Rehydrate any previously persisted projects on boot. */
@@ -43,11 +34,7 @@ export class ProjectsService implements OnModuleInit {
       if (!fs.existsSync(file)) continue;
       try {
         const project = JSON.parse(fs.readFileSync(file, 'utf8')) as Project;
-        // Any project left mid-flight after a crash is marked failed.
-        if (project.status === 'processing' || project.status === 'queued') {
-          project.status = 'failed';
-          project.error = 'Interrupted by server restart';
-        }
+        project.faces ??= [];
         this.projects.set(project.id, project);
       } catch (err) {
         this.logger.warn(`Could not load project at ${file}: ${(err as Error).message}`);
@@ -66,20 +53,15 @@ export class ProjectsService implements OnModuleInit {
     fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify(project, null, 2), 'utf8');
   }
 
-  create(params: { originalName: string; originalPath: string; photoCount?: number }): Project {
+  create(params: { originalName: string }): Project {
     const now = new Date().toISOString();
     const project: Project = {
       id: nanoid(),
-      status: 'uploaded',
-      progress: 0,
+      status: 'completed', // set to failed only if storage errors out
       createdAt: now,
       updatedAt: now,
       originalName: params.originalName,
-      originalPath: params.originalPath,
-      photoCount: params.photoCount,
-      steps: PANORAMA_STEPS.map(
-        (s): PipelineStepState => ({ id: s.id, label: s.label, status: 'pending' }),
-      ),
+      faces: [],
     };
     this.projects.set(project.id, project);
     this.persist(project);
@@ -108,40 +90,10 @@ export class ProjectsService implements OnModuleInit {
     return this.update(id, { status, ...(error ? { error } : {}) });
   }
 
-  /** Update a single step's state and recompute overall progress. */
-  updateStep(id: string, stepId: PipelineStepId, patch: Partial<PipelineStepState>): Project {
-    const project = this.findOne(id);
-    const step = project.steps.find((s) => s.id === stepId);
-    if (step) {
-      Object.assign(step, patch);
-      if (patch.status === 'running' && !step.startedAt) {
-        step.startedAt = new Date().toISOString();
-      }
-      if (
-        (patch.status === 'completed' || patch.status === 'failed' || patch.status === 'skipped') &&
-        step.startedAt
-      ) {
-        step.endedAt = new Date().toISOString();
-        step.durationMs = Date.parse(step.endedAt) - Date.parse(step.startedAt);
-      }
-    }
-    project.progress = this.computeProgress(project.steps);
-    project.updatedAt = new Date().toISOString();
-    this.persist(project);
-    return project;
-  }
-
-  private computeProgress(steps: PipelineStepState[]): number {
-    const done = steps.filter((s) => s.status === 'completed' || s.status === 'skipped').length;
-    return Math.round((done / steps.length) * 100);
-  }
-
   /** Remove a project record and all of its on-disk artifacts. */
   remove(id: string): void {
     this.findOne(id); // 404 if unknown
-    // Both workspaces are keyed directly by project id.
     fs.rmSync(this.projectDir(id), { recursive: true, force: true });
-    fs.rmSync(path.join(this.uploadPath, id), { recursive: true, force: true });
     this.projects.delete(id);
   }
 }

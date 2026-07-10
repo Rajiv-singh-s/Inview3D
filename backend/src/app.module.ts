@@ -1,15 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import configuration from './config/configuration';
-import { PanoramaModule } from './modules/panorama/panorama.module';
+import { CubeModule } from './modules/cube/cube.module';
 import { ProjectsModule } from './modules/projects/projects.module';
-import { QueueModule } from './modules/queue/queue.module';
 import { HealthController } from './health.controller';
 
 /**
  * Root module. ConfigModule is global; ProjectsModule is @Global so its service
- * is available everywhere. QueueModule owns BullMQ + the stitching worker;
- * PanoramaModule owns capture ingestion and photosphere delivery.
+ * is available everywhere. CubeModule owns capture ingestion and face delivery.
+ * No queue/Redis — the cube is built on the client, so nothing runs async here.
  */
 @Module({
   imports: [
@@ -19,8 +18,7 @@ import { HealthController } from './health.controller';
       envFilePath: ['../.env', '.env'],
     }),
     ProjectsModule,
-    QueueModule,
-    PanoramaModule,
+    CubeModule,
   ],
   controllers: [HealthController],
 })

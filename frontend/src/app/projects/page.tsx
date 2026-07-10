@@ -4,8 +4,6 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { StatusBadge } from '@/components/ui/StatusBadge';
-import { ProgressBar } from '@/components/ui/ProgressBar';
-import { formatBytes } from '@/lib/format';
 import type { Project } from '@/types';
 
 export default function ProjectsPage() {
@@ -53,25 +51,12 @@ export default function ProjectsPage() {
               <StatusBadge status={project.status} />
             </div>
 
-            {project.status === 'processing' || project.status === 'queued' ? (
-              <ProgressBar value={project.progress} />
-            ) : null}
-
             <div className="flex items-center justify-between text-sm text-slate-400">
-              <span>
-                {new Date(project.createdAt).toLocaleString()}
-              </span>
+              <span>{new Date(project.createdAt).toLocaleString()}</span>
               <div className="flex gap-3">
-                {project.status === 'completed' ? (
+                {project.status === 'completed' && (
                   <Link href={`/viewer/${project.id}`} className="text-brand-400 hover:underline">
                     Open viewer
-                  </Link>
-                ) : (
-                  <Link
-                    href={`/processing/${project.id}`}
-                    className="text-brand-400 hover:underline"
-                  >
-                    View status
                   </Link>
                 )}
                 <button

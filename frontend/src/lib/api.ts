@@ -1,4 +1,4 @@
-import type { CaptureResponse, Project, StatusResponse, ViewerMetadata } from '@/types';
+import type { CubeCaptureResponse, Project, ViewerMetadata } from '@/types';
 
 const API_OVERRIDE_KEY = 'inview3d.apiBaseUrl';
 
@@ -57,58 +57,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   /**
-   * Upload a guided capture. Photos must be appended in capture order — the
-   * stitcher matches consecutive shots.
+   * Finalize a capture by uploading the painted cube faces. The cube was built
+   * live in the browser, so the backend only stores the faces — there is no
+   * server-side reconstruction step.
    */
-  uploadCapture(
-    photos: Blob[],
-    name: string,
-    /** Device orientation per photo, in capture order. Same length as `photos`. */
-    poses: Array<{ yaw: number; pitch: number; face: string }>,
-    onProgress?: (percent: number) => void,
-    signal?: AbortSignal,
-  ): Promise<CaptureResponse> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      const form = new FormData();
-      photos.forEach((p, i) => form.append('photos', p, `photo_${String(i).padStart(3, '0')}.jpg`));
-      form.append('name', name);
-      // The phone already knows where it was pointing; the stitcher should not
-      // have to rediscover that from pixels alone.
-      form.append('poses', JSON.stringify(poses));
-
-      xhr.open('POST', `${getApiBaseUrl()}/panorama/capture`);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText) as CaptureResponse);
-        } else {
-          let message = `Upload failed (${xhr.status})`;
-          try {
-            const m = JSON.parse(xhr.responseText)?.message;
-            message = Array.isArray(m) ? m.join(', ') : (m ?? message);
-          } catch {
-            /* ignore */
-          }
-          reject(new ApiError(message, xhr.status));
-        }
-      };
-      xhr.onerror = () => reject(new ApiError('Network error while uploading photos', 0));
-      xhr.onabort = () => reject(new ApiError('Upload canceled', 0));
-      if (signal) signal.addEventListener('abort', () => xhr.abort());
-      xhr.send(form);
-    });
+  async uploadCube(faces: Map<string, Blob>, name: string): Promise<CubeCaptureResponse> {
+    const form = new FormData();
+    form.append('name', name);
+    for (const [face, blob] of faces) {
+      form.append('faces', blob, `${face}.jpg`);
+    }
+    return request<CubeCaptureResponse>('/cube/capture', { method: 'POST', body: form });
   },
 
   listProjects: () => request<Project[]>('/projects'),
   getProject: (id: string) => request<Project>(`/project/${id}`),
-  getStatus: (id: string) => request<StatusResponse>(`/status/${id}`),
   getViewerMetadata: (id: string) => request<ViewerMetadata>(`/viewer/${id}`),
   deleteProject: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/project/${id}`, { method: 'DELETE' }),
 
-  /** Absolute URL of the stitched cubemap face for a completed project. */
-  panoramaFaceUrl: (id: string, face: string) => `${getApiBaseUrl()}/panorama/${id}/faces/${face}`,
+  /** Absolute URL of a stored cube face image for a completed project. */
+  cubeFaceUrl: (id: string, face: string) => `${getApiBaseUrl()}/cube/${id}/faces/${face}`,
 };

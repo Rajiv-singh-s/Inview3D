@@ -2,8 +2,8 @@ import { Controller, Delete, Get, NotFoundException, Param } from '@nestjs/commo
 import { ProjectsService } from './projects.service';
 
 /**
- * Project listing, details, status polling and viewer metadata.
- * Capture upload and photosphere delivery live in PanoramaController.
+ * Project listing, details and viewer metadata. Cube capture ingestion and
+ * face delivery live in CubeController.
  */
 @Controller()
 export class ProjectsController {
@@ -21,35 +21,17 @@ export class ProjectsController {
     return this.projects.findOne(id);
   }
 
-  /** GET /status/:id — lightweight status/progress for polling. */
-  @Get('status/:id')
-  status(@Param('id') id: string) {
-    const p = this.projects.findOne(id);
-    return {
-      id: p.id,
-      status: p.status,
-      progress: p.progress,
-      steps: p.steps,
-      error: p.error,
-      updatedAt: p.updatedAt,
-    };
-  }
-
-  /**
-   * GET /viewer/:id — metadata the photosphere viewer needs. `width`/`height`
-   * let the client confirm the image is a 2:1 equirectangular before mapping it
-   * onto a sphere.
-   */
+  /** GET /viewer/:id — metadata the cube viewer needs: which faces to load. */
   @Get('viewer/:id')
   viewer(@Param('id') id: string) {
     const p = this.projects.findOne(id);
-    if (p.status !== 'completed' || !p.cubemapReady) {
-      throw new NotFoundException('This cubemap is not ready yet');
+    if (p.status !== 'completed' || p.faces.length === 0) {
+      throw new NotFoundException('This room is not ready yet');
     }
     return {
       id: p.id,
       originalName: p.originalName,
-      photoCount: p.photoCount,
+      faces: p.faces,
       completedAt: p.updatedAt,
     };
   }
