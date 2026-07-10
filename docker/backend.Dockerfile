@@ -19,34 +19,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip \
     # OpenMVS build deps
     libcgal-dev libboost-all-dev libopencv-dev libglu1-mesa-dev \
-    libglew-dev libeigen3-dev libnanoflann-dev libtinyxml2-dev \
+    libglew-dev libeigen3-dev libnanoflann-dev libtinyxml2-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu 22.04 ships CMake 3.22, but current OpenMVS requires a newer CMake.
 # Install an up-to-date CMake from pip (lands in /usr/local/bin, ahead on PATH).
 RUN pip3 install --no-cache-dir "cmake>=3.28"
 
-# Ubuntu's libtinyxml2-dev ships only pkg-config, not the CMake config that
-# TinyEXIF's find_package(tinyxml2) needs — so build tinyxml2 from source.
-RUN git clone --depth 1 -b 10.0.0 https://github.com/leethomason/tinyxml2.git /opt/tinyxml2 && \
-    cmake -S /opt/tinyxml2 -B /opt/tinyxml2/build \
-      -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON && \
-    cmake --build /opt/tinyxml2/build --target install -j2 && \
-    ldconfig
-
-# TinyEXIF is required by OpenMVS master and is not packaged in apt.
-RUN git clone --depth 1 https://github.com/cdcseacave/TinyEXIF.git /opt/TinyEXIF && \
-    cmake -S /opt/TinyEXIF -B /opt/TinyEXIF/build \
-      -DCMAKE_BUILD_TYPE=Release -DBUILD_DEMO=OFF -DBUILD_SHARED_LIBS=ON && \
-    cmake --build /opt/TinyEXIF/build --target install -j2 && \
-    ldconfig
-
 # ---- Build OpenMVS (VCGLib + OpenMVS) -------------------------------------
 WORKDIR /opt
+# Pinned to v2.3.0 deliberately: OpenMVS master added a `libs/SFM` module that
+# pulls in PoseLib, TinyNPY, TinyEXIF and nanoflann, none of which are packaged.
+# v2.3.0 has no libs/SFM and builds against the apt deps above, and still ships
+# every binary this pipeline uses (InterfaceCOLMAP, DensifyPointCloud,
+# ReconstructMesh, TextureMesh).
+#
 # Out-of-source build into a distinct dir (the repo already ships a `build/`),
 # with CUDA disabled for this CPU-only image.
 RUN git clone --depth 1 https://github.com/cdcseacave/VCG.git vcglib && \
-    git clone --depth 1 https://github.com/cdcseacave/openMVS.git openMVS && \
+    git clone --depth 1 -b v2.3.0 https://github.com/cdcseacave/openMVS.git openMVS && \
     cmake -S openMVS -B openMVS_build \
       -DCMAKE_BUILD_TYPE=Release \
       -DVCG_ROOT=/opt/vcglib \

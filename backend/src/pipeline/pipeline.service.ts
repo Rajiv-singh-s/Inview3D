@@ -11,7 +11,17 @@ import {
 } from '../common/logger/pipeline-logger.service';
 import { PipelineStepId } from '../common/interfaces';
 import { ProjectsService } from '../modules/projects/projects.service';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { CommandError, runCommand } from './command.util';
+
+const execFileAsync = promisify(execFile);
+
+/** Option namespaces for COLMAP's GPU/thread flags, which were renamed in 4.x. */
+interface ColmapOptionNames {
+  extraction: string;
+  matching: string;
+}
 
 /** Resolved on-disk locations for one project's pipeline run. */
 interface Workspace {
@@ -234,12 +244,48 @@ export class PipelineService {
     return this.app.bin.colmap;
   }
 
+  private colmapOptions?: ColmapOptionNames;
+
+  /**
+   * COLMAP 4.x moved the `use_gpu` / `num_threads` flags from the
+   * `SiftExtraction.*` / `SiftMatching.*` namespaces to `FeatureExtraction.*` /
+   * `FeatureMatching.*`. Passing the wrong ones aborts the command outright, and
+   * the version differs between environments (Docker image ships 3.7, native
+   * Windows builds are 4.x), so detect it once and cache.
+   */
+  private async getColmapOptions(): Promise<ColmapOptionNames> {
+    if (this.colmapOptions) return this.colmapOptions;
+
+    let major = 3; // conservative default: the older namespace
+    try {
+      const { stdout, stderr } = await execFileAsync(this.colmap, ['-h'], { timeout: 20_000 });
+      major = this.parseColmapMajor(`${stdout}\n${stderr}`) ?? major;
+    } catch (err) {
+      // `colmap -h` may exit non-zero while still printing the banner.
+      const e = err as { stdout?: string; stderr?: string };
+      major = this.parseColmapMajor(`${e.stdout ?? ''}\n${e.stderr ?? ''}`) ?? major;
+    }
+
+    this.colmapOptions =
+      major >= 4
+        ? { extraction: 'FeatureExtraction', matching: 'FeatureMatching' }
+        : { extraction: 'SiftExtraction', matching: 'SiftMatching' };
+    this.logger.log(`Detected COLMAP major version ${major}; using ${this.colmapOptions.extraction}.*`);
+    return this.colmapOptions;
+  }
+
+  private parseColmapMajor(text: string): number | undefined {
+    const m = text.match(/COLMAP\s+(\d+)\./i);
+    return m ? Number.parseInt(m[1], 10) : undefined;
+  }
+
   private get databasePath() {
     return 'database.db';
   }
 
-  private colmapFeatureExtraction(ws: Workspace, log: ProjectLogger): Promise<void> {
+  private async colmapFeatureExtraction(ws: Workspace, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(ws.colmap, { recursive: true });
+    const opts = await this.getColmapOptions();
     return runCommand(
       this.colmap,
       [
@@ -252,17 +298,17 @@ export class PipelineService {
         '1',
         // Force CPU SIFT: GPU (OpenGL) extraction fails when COLMAP runs as a
         // spawned background process without a window/display context.
-        // NOTE: COLMAP 4.x renamed these from SiftExtraction.* to FeatureExtraction.*
-        '--FeatureExtraction.use_gpu',
+        `--${opts.extraction}.use_gpu`,
         '0',
-        '--FeatureExtraction.num_threads',
+        `--${opts.extraction}.num_threads`,
         String(this.threads),
       ],
       log,
     );
   }
 
-  private colmapFeatureMatching(ws: Workspace, log: ProjectLogger): Promise<void> {
+  private async colmapFeatureMatching(ws: Workspace, log: ProjectLogger): Promise<void> {
+    const opts = await this.getColmapOptions();
     return runCommand(
       this.colmap,
       [
@@ -270,10 +316,9 @@ export class PipelineService {
         '--database_path',
         path.join(ws.colmap, this.databasePath),
         // CPU matching for the same headless-process reason as extraction.
-        // NOTE: COLMAP 4.x renamed these from SiftMatching.* to FeatureMatching.*
-        '--FeatureMatching.use_gpu',
+        `--${opts.matching}.use_gpu`,
         '0',
-        '--FeatureMatching.num_threads',
+        `--${opts.matching}.num_threads`,
         String(this.threads),
       ],
       log,
@@ -358,57 +403,74 @@ export class PipelineService {
     );
   }
 
+  /** Path of the mesh produced by ReconstructMesh (a PLY, not a scene file). */
+  private meshPly(ws: Workspace): string {
+    return path.join(ws.mesh, 'scene_mesh.ply');
+  }
+
   private async mvsReconstructMesh(ws: Workspace, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(ws.mesh, { recursive: true });
+    // `-o` for ReconstructMesh is the *mesh* output file, not an .mvs scene.
     await runCommand(
       this.openmvsBin('ReconstructMesh'),
       [
+        '-i',
         path.join(ws.dense, 'scene_dense.mvs'),
         '-o',
-        path.join(ws.mesh, 'scene_mesh.mvs'),
-        '--working-folder',
+        this.meshPly(ws),
+        '-w',
         ws.dense,
       ],
       log,
     );
+    this.assertExists(this.meshPly(ws), 'reconstructed mesh');
+  }
+
+  /**
+   * Textured mesh output. PLY, not OBJ: OpenMVS v2.3.0's OBJ exporter
+   * segfaults after texturing completes. The PLY records its atlas via a
+   * `comment TextureFile <name>.png` header, which trimesh reads back.
+   */
+  private texturedPly(ws: Workspace): string {
+    return path.join(ws.textures, 'model_textured.ply');
   }
 
   private async mvsTextureMesh(ws: Workspace, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(ws.textures, { recursive: true });
+    // TextureMesh needs the scene (camera poses) via -i and the mesh via -m;
+    // passing the mesh as the scene silently exits with code 1.
     await runCommand(
       this.openmvsBin('TextureMesh'),
       [
-        path.join(ws.mesh, 'scene_mesh.mvs'),
+        '-i',
+        path.join(ws.dense, 'scene_dense.mvs'),
+        '-m',
+        this.meshPly(ws),
         '-o',
-        path.join(ws.textures, 'model_textured.obj'),
+        this.texturedPly(ws),
         '--export-type',
-        'obj',
-        '--working-folder',
+        'ply',
+        '-w',
         ws.dense,
       ],
       log,
     );
-    this.assertExists(path.join(ws.textures, 'model_textured.obj'), 'textured mesh');
+    this.assertExists(this.texturedPly(ws), 'textured mesh');
   }
 
   private exportGlb(ws: Workspace, glbPath: string, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(path.dirname(glbPath), { recursive: true });
     const script = path.join(this.app.pipelineScriptsDir, '..', 'python', 'convert_to_glb.py');
-    return runCommand(
-      'python3',
-      [script, '--input', path.join(ws.textures, 'model_textured.obj'), '--output', glbPath],
-      log,
-    ).catch((err) => {
-      // Fall back to `python` on systems where python3 is unavailable.
-      if (err instanceof CommandError && err.code === null) {
-        return runCommand(
-          'python',
-          [script, '--input', path.join(ws.textures, 'model_textured.obj'), '--output', glbPath],
-          log,
-        );
-      }
-      throw err;
-    });
+    const input = this.texturedPly(ws);
+    return runCommand('python3', [script, '--input', input, '--output', glbPath], log).catch(
+      (err) => {
+        // Fall back to `python` on systems where python3 is unavailable.
+        if (err instanceof CommandError && err.code === null) {
+          return runCommand('python', [script, '--input', input, '--output', glbPath], log);
+        }
+        throw err;
+      },
+    );
   }
 
   private async optimizeGlb(glbPath: string, log: ProjectLogger): Promise<void> {

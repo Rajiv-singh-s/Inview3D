@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Convert a textured mesh (OBJ + material + texture) into a single GLB file.
+"""Convert a textured mesh into a single GLB file.
 
 Used by the backend's `generate-glb` pipeline step. Loads the OpenMVS textured
-OBJ via trimesh (which resolves the .mtl and texture image), applies a
-coordinate-system fix so the model is Y-up for three.js, and writes a binary
-glTF (.glb) with the texture embedded.
+mesh via trimesh — a PLY whose `comment TextureFile <name>.png` header points at
+the atlas alongside it (OBJ also works) — applies a coordinate-system fix so the
+model is Y-up for three.js, and writes a binary glTF (.glb) with the texture
+embedded.
 
 Usage:
-    python convert_to_glb.py --input model_textured.obj --output model.glb
+    python convert_to_glb.py --input model_textured.ply --output model.glb
 """
 import argparse
 import os
@@ -54,7 +55,7 @@ def convert(input_path: str, output_path: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Convert a textured mesh to GLB")
-    parser.add_argument("--input", required=True, help="Path to the textured OBJ")
+    parser.add_argument("--input", required=True, help="Path to the textured mesh (.ply/.obj)")
     parser.add_argument("--output", required=True, help="Path to write the .glb")
     args = parser.parse_args()
     try:
