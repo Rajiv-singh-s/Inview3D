@@ -71,6 +71,7 @@ export class PanoramaService {
 
     await this.step(projectId, 'stitch-panorama', log, async () => {
       // Stitch each face independently
+      let faceIndex = 0;
       for (const face of CUBE_FACES) {
         const faceInput = path.join(ws.photos, face);
         const faceOutput = path.join(ws.faces, `${face}.jpg`);
@@ -79,6 +80,9 @@ export class PanoramaService {
         if (fs.existsSync(faceInput)) {
           log.info(`Stitching face: ${face}`);
           await this.stitchFace(faceInput, faceOutput, path.join(ws.root, 'poses.json'), face, log);
+          faceIndex++;
+          const currentProgress = Math.round(10 + (faceIndex / CUBE_FACES.length) * 80);
+          this.projects.update(projectId, { progress: currentProgress });
         }
       }
     });

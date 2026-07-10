@@ -102,6 +102,55 @@ interface GuidedCaptureProps {
   onFinish: () => void;
   onCancel: () => void;
   busy?: boolean;
+  uploadProgress?: number;
+}
+
+// 3D Perspective Projection helper
+function projectTarget(
+  targetYaw: number,
+  targetPitch: number,
+  cameraYaw: number,
+  cameraPitch: number,
+  baseYaw: number
+): { x: number; y: number; visible: boolean } {
+  const absTargetYaw = (baseYaw + targetYaw) % 360;
+  
+  const theta_t = (absTargetYaw * Math.PI) / 180;
+  const phi_t = (targetPitch * Math.PI) / 180;
+  
+  const theta_c = (cameraYaw * Math.PI) / 180;
+  const phi_c = (cameraPitch * Math.PI) / 180;
+  
+  // 3D vector of target in world coordinates
+  const x_w = Math.sin(theta_t) * Math.cos(phi_t);
+  const y_w = Math.sin(phi_t);
+  const z_w = -Math.cos(theta_t) * Math.cos(phi_t);
+  
+  // Rotate by -theta_c around Y
+  const x1 = x_w * Math.cos(theta_c) + z_w * Math.sin(theta_c);
+  const y1 = y_w;
+  const z1 = -x_w * Math.sin(theta_c) + z_w * Math.cos(theta_c);
+  
+  // Rotate by -phi_c around X
+  const x_c = x1;
+  const y_c = y1 * Math.cos(phi_c) + z1 * Math.sin(phi_c);
+  const z_c = -y1 * Math.sin(phi_c) + z1 * Math.cos(phi_c);
+  
+  if (z_c >= 0) {
+    return { x: 0, y: 0, visible: false };
+  }
+  
+  // Perspective projection factor (adjust to match typical mobile back camera FOV)
+  const f = 1.35; 
+  
+  const u = f * (x_c / -z_c);
+  const v = f * (y_c / -z_c);
+  
+  const x = 50 + u * 50;
+  const y = 50 - v * 50;
+  
+  const visible = x >= -10 && x <= 110 && y >= -10 && y <= 110;
+  return { x, y, visible };
 }
 
 export function GuidedCapture({
@@ -111,6 +160,7 @@ export function GuidedCapture({
   onFinish,
   onCancel,
   busy,
+  uploadProgress = 0,
 }: GuidedCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -397,7 +447,8 @@ export function GuidedCapture({
       if (taken[i]) return;
       const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
       const dPitch = t.pitch - orient.pitch;
-      const dist = Math.hypot(dYaw, dPitch);
+      // Scale dYaw by cos(pitch) to prevent gimbal lock artifacts near poles
+      const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
       if (dist < minD) {
         minD = dist;
         closestIdx = i;
@@ -406,48 +457,98 @@ export function GuidedCapture({
     return closestIdx >= 0 ? closestIdx : null;
   }, [orient, targets, taken]);
 
-  const { dots, current } = useMemo((): {
-    dots: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }>;
-    current: { index: number; dist: number; dYaw: number; dPitch: number } | null;
-  } => {
-    if (!orient || baseYawRef.current == null) return { dots: [], current: null };
+  // Project all dots using 3D Perspective Projection
+  const dots = useMemo(() => {
+    if (!orient || baseYawRef.current == null) return [];
     const base = baseYawRef.current;
 
-    let currentTarget: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
-    const byAnchor = new Map<number, { index: number; dist: number; isTaken: boolean }>();
-
-    targets.forEach((t, index) => {
-      const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
+    return targets.map((t, index) => {
+      const proj = projectTarget(t.yaw, t.pitch, orient.yaw, orient.pitch, base);
+      
+      const absTargetYaw = (base + t.yaw) % 360;
+      const dYaw = angleDelta(orient.yaw, absTargetYaw);
       const dPitch = t.pitch - orient.pitch;
       const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
 
-      if (index === nextTargetIndex) currentTarget = { index, dist, dYaw, dPitch };
-
-      if (dist <= TOLERANCE_DEG) return;
-      if (dist > MAX_DOT_BEARING_DEG) return;
-
-      const bearing = Math.atan2(dPitch, dYaw);
-      const anchor = ((Math.round(bearing / (Math.PI / 4)) % 8) + 8) % 8;
-
-      const existing = byAnchor.get(anchor);
-      if (!existing || dist < existing.dist) {
-        byAnchor.set(anchor, { index, dist, isTaken: taken[index] });
-      }
-    });
-
-    const visible = [...byAnchor.entries()].map(([anchor, v]) => {
-      const a = (anchor * Math.PI) / 4;
       return {
-        index: v.index,
-        x: 50 + Math.cos(a) * DOT_RADIUS_X,
-        y: 50 - Math.sin(a) * DOT_RADIUS_Y,
-        dist: v.dist,
-        isTaken: v.isTaken,
+        index,
+        x: proj.x,
+        y: proj.y,
+        visible: proj.visible,
+        dist,
+        isTaken: taken[index],
       };
     });
+  }, [orient, targets, taken]);
 
-    return { dots: visible, current: currentTarget };
-  }, [orient, targets, taken, nextTargetIndex]);
+  const current = useMemo(() => {
+    if (nextTargetIndex === null || !orient || baseYawRef.current == null) return null;
+    const t = targets[nextTargetIndex];
+    const base = baseYawRef.current;
+    
+    const absTargetYaw = (base + t.yaw) % 360;
+    const dYaw = angleDelta(orient.yaw, absTargetYaw);
+    const dPitch = t.pitch - orient.pitch;
+    const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
+    
+    return {
+      index: nextTargetIndex,
+      dist,
+      dYaw,
+      dPitch,
+    };
+  }, [nextTargetIndex, orient, targets]);
+
+  // Compute 3D Grid Paths (Lines of constant Yaw and Pitch locked to the world coordinates)
+  const gridPaths = useMemo(() => {
+    if (!orient || baseYawRef.current == null) return [];
+    const base = baseYawRef.current;
+    const paths: string[] = [];
+
+    // Horizontal grid lines (constant Pitch rings)
+    const pitches = [-45, 0, 45];
+    pitches.forEach((p) => {
+      let pathStr = '';
+      let first = true;
+      for (let y = 0; y <= 360; y += 10) {
+        const proj = projectTarget(y, p, orient.yaw, orient.pitch, base);
+        if (proj.visible) {
+          if (first) {
+            pathStr += `M ${proj.x} ${proj.y}`;
+            first = false;
+          } else {
+            pathStr += ` L ${proj.x} ${proj.y}`;
+          }
+        } else {
+          first = true; // Break connection if line goes behind
+        }
+      }
+      if (pathStr) paths.push(pathStr);
+    });
+
+    // Vertical grid lines (constant Yaw planes)
+    const yaws = [0, 45, 90, 135, 180, 225, 270, 315];
+    yaws.forEach((y) => {
+      let pathStr = '';
+      let first = true;
+      for (let p = -80; p <= 80; p += 10) {
+        const proj = projectTarget(y, p, orient.yaw, orient.pitch, base);
+        if (proj.visible) {
+          if (first) {
+            pathStr += `M ${proj.x} ${proj.y}`;
+            first = false;
+          } else {
+            pathStr += ` L ${proj.x} ${proj.y}`;
+          }
+        } else {
+          first = true;
+        }
+      }
+      if (pathStr) paths.push(pathStr);
+    });
+
+    return paths;
+  }, [orient]);
 
   useEffect(() => {
     if (!ready || busy || done || !hasCompass || capturePhase !== 'capturing' || posError) return;
@@ -576,7 +677,7 @@ export function GuidedCapture({
             disabled={busy}
             className="w-full rounded-xl bg-green-500 py-3 font-semibold text-white active:bg-green-600 disabled:opacity-40"
           >
-            {busy ? 'Stitching...' : 'Stitch and post'}
+            {busy ? `Stitching... (${uploadProgress}%)` : 'Stitch and post'}
           </button>
           <button
             onClick={() => setCapturePhase('capturing')}
@@ -614,9 +715,23 @@ export function GuidedCapture({
       />
 
       <div className="pointer-events-none absolute inset-0">
+        {/* 3D Grid Overlay */}
+        <svg className="absolute inset-0 w-full h-full pointer-events-none">
+          {gridPaths.map((pathStr, idx) => (
+            <path
+              key={idx}
+              d={pathStr}
+              fill="none"
+              stroke="rgba(255,255,255,0.18)"
+              strokeWidth="1.2"
+              strokeDasharray="4 4"
+            />
+          ))}
+        </svg>
+
         <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/20" />
 
-        {dots.map((d) => {
+        {dots.filter(d => d.visible).map((d) => {
           const isNext = d.index === nextTargetIndex;
           const isAligned = isNext && d.dist <= TOLERANCE_DEG;
           const size = isNext ? (isAligned ? 38 : 26) : 20;

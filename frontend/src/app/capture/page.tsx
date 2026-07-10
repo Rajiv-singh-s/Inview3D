@@ -29,16 +29,18 @@ export default function CapturePage() {
   const [phase, setPhase] = useState<Phase>('intro');
   const [shots, setShots] = useState<CapturedShot[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const start = async () => {
     try {
       await requestMotionPermission();
       setShots([]);
+      setUploadProgress(0);
       setPhase('capturing');
     } catch (err) {
-      // Guidance is optional; capture still works with manual shots.
       console.warn(err);
       setShots([]);
+      setUploadProgress(0);
       setPhase('capturing');
     }
   };
@@ -52,11 +54,13 @@ export default function CapturePage() {
   const finish = async () => {
     if (shots.length < 4) return;
     setPhase('uploading');
+    setUploadProgress(0);
     try {
       const res = await api.uploadCapture(
         shots.map((s) => s.blob),
         `Capture ${new Date().toLocaleString()}`,
         shots.map((s) => ({ yaw: s.yaw, pitch: s.pitch, face: s.face })),
+        (progress) => setUploadProgress(progress),
       );
       router.push(`/processing/${res.id}`);
     } catch (err) {
@@ -130,6 +134,7 @@ export default function CapturePage() {
       onFinish={finish}
       onCancel={() => setPhase('intro')}
       busy={phase === 'uploading'}
+      uploadProgress={uploadProgress}
     />
   );
 }
