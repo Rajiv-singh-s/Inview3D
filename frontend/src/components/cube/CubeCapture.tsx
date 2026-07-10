@@ -16,6 +16,12 @@ const DWELL_MS = 400;
 const MAX_ROTATION_DEG_PER_SEC = 20;
 /** Frames below this Laplacian variance are rejected as blurred. */
 const MIN_SHARPNESS = 10;
+/**
+ * Assumed horizontal field of view of the rear camera, in degrees — the one
+ * intrinsic the browser will not tell us. Used to project each frame into cube
+ * space. Typical phone main cameras sit around 65–70°.
+ */
+const CAMERA_HFOV_DEG = 68;
 
 interface CubeCaptureProps {
   /** Called with the new project id once the finalized cube is stored. */
@@ -142,13 +148,13 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     setTimeout(() => setFlash(false), 130);
   }, []);
 
-  /** Grab the current video frame and project it onto `faceIndex`. */
+  /** Grab the current video frame and project it into the cube at the given pose. */
   const captureFace = useCallback(
     (faceIndex: number): boolean => {
       const video = videoRef.current;
       if (!video || video.videoWidth === 0 || capturingRef.current) return false;
       const t = FACE_TARGETS[faceIndex];
-      if (!t || cube.isPainted(t.face)) return false;
+      if (!t || cube.isCaptured(t.face)) return false;
 
       const sharp = sharpness(video, video.videoWidth, video.videoHeight);
       if (sharp < MIN_SHARPNESS) {
@@ -163,24 +169,29 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
       cap.width = video.videoWidth;
       cap.height = video.videoHeight;
       cap.getContext('2d')!.drawImage(video, 0, 0);
-      cube.paint(t.face, cap, cap.width, cap.height); // live projection
 
-      setPaintedCount(cube.paintedCount());
+      // Project the whole frame into cube space at the pose it was shot from.
+      // With a compass that pose is the live orientation; without one, the
+      // target's nominal direction is the best estimate.
+      const pose = hasCompass ? aimRef.current : { yaw: t.yaw, pitch: t.pitch };
+      cube.project(cap, pose, CAMERA_HFOV_DEG);
+
+      setPaintedCount(cube.capturedCount());
       triggerFlash();
       setReason(null);
       dwellStartRef.current = null;
       setDwell(0);
 
-      // Advance to the next unpainted target.
+      // Advance to the next face that still needs coverage.
       let next = faceIndex + 1;
-      while (next < FACE_TARGETS.length && cube.isPainted(FACE_TARGETS[next].face)) next++;
+      while (next < FACE_TARGETS.length && cube.isCaptured(FACE_TARGETS[next].face)) next++;
       targetIndexRef.current = next;
       setTargetIndex(next);
 
       setTimeout(() => (capturingRef.current = false), 500);
       return true;
     },
-    [cube, triggerFlash],
+    [cube, hasCompass, triggerFlash],
   );
 
   // ---- auto-capture loop (compass mode) ----------------------------------
@@ -190,7 +201,7 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     const tick = () => {
       const idx = targetIndexRef.current;
       const t = FACE_TARGETS[idx];
-      if (t && !cube.isPainted(t.face)) {
+      if (t && !cube.isCaptured(t.face)) {
         const err = aimError(aimRef.current, t);
         setHint(directionHint(aimRef.current, t, TOLERANCE_DEG));
 
