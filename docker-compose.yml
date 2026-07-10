@@ -40,7 +40,7 @@ services:
       - UPLOAD_PATH=/data/uploads
       - OUTPUT_PATH=/data/output
       # Allow both the deployed Vercel frontend and local dev.
-      - CORS_ORIGIN=${CORS_ORIGIN:-https://inview3-d-frontend.vercel.app,https://ceiling-accurately-george-revenues.trycloudflare.com,http://localhost:3001,http://localhost:3000}
+      - CORS_ORIGIN=${CORS_ORIGIN:-https://inview3-d-frontend.vercel.app,https://patio-sphere-partly-suddenly.trycloudflare.com,http://localhost:3001,http://localhost:3000}
     ports:
       - '4000:4000'
     volumes:
