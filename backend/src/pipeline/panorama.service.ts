@@ -8,25 +8,18 @@ import { PipelineStepId } from '../common/interfaces';
 import { ProjectsService } from '../modules/projects/projects.service';
 import { CommandError, runCommand } from './command.util';
 
-/** On-disk layout for one panorama capture. */
-interface PanoramaWorkspace {
+/** On-disk layout for one cubemap capture. */
+interface CubemapWorkspace {
   root: string;
   photos: string;
-  panorama: string;
+  faces: string;
   logs: string;
 }
 
-/** Minimum photos needed for OpenCV to estimate a rotation and stitch. */
-const MIN_PHOTOS = 4;
+const CUBE_FACES = ['front', 'back', 'left', 'right', 'top', 'bottom'];
 
 /**
- * Builds a photosphere from photos captured while rotating in place.
- *
- * Purely classical CV: OpenCV's feature-based stitcher (features -> pairwise
- * matching -> bundle adjustment -> spherical warp -> multi-band blending).
- * No AI, no depth estimation. The output is rendered inside a sphere by the
- * viewer, so the imagery stays photoreal rather than being re-derived from
- * reconstructed geometry.
+ * Builds a cubemap from 18 guided photos (3 per face).
  */
 @Injectable()
 export class PanoramaService {
@@ -41,18 +34,18 @@ export class PanoramaService {
     this.app = config.getOrThrow<AppConfig>('app');
   }
 
-  workspace(projectId: string): PanoramaWorkspace {
+  workspace(projectId: string): CubemapWorkspace {
     const root = path.join(this.app.uploadPath, projectId);
     return {
       root,
       photos: path.join(root, 'photos'),
-      panorama: path.join(root, 'panorama'),
+      faces: path.join(root, 'faces'),
       logs: path.join(root, 'logs'),
     };
   }
 
   /** Creates the capture workspace up front so the controller can stream photos into it. */
-  createWorkspace(projectId: string): PanoramaWorkspace {
+  createWorkspace(projectId: string): CubemapWorkspace {
     const ws = this.workspace(projectId);
     for (const dir of Object.values(ws)) fs.mkdirSync(dir, { recursive: true });
     return ws;
@@ -63,64 +56,91 @@ export class PanoramaService {
     const log = this.loggerFactory.create(projectId, ws.logs);
 
     this.projects.setStatus(projectId, 'processing');
-    log.info('Panorama pipeline started');
+    log.info('Cubemap pipeline started');
 
     await this.step(projectId, 'validate-photos', log, async () => {
-      const photos = this.listPhotos(ws);
-      if (photos.length < MIN_PHOTOS) {
+      const count = this.countPhotos(ws.photos);
+      if (count !== 18) {
         throw new Error(
-          `Only ${photos.length} photos captured — need at least ${MIN_PHOTOS}. ` +
-            'Complete the full rotation so consecutive shots overlap.',
+          `Expected exactly 18 photos (3 per face) for cubemap, but found ${count}.`
         );
       }
-      this.projects.update(projectId, { photoCount: photos.length });
-      log.info(`Validated ${photos.length} photos`);
+      this.projects.update(projectId, { photoCount: count });
+      log.info(`Validated 18 photos grouped by face`);
     });
 
-    const panoPath = path.join(ws.panorama, 'panorama.jpg');
-    await this.step(projectId, 'stitch-panorama', log, () => this.stitch(ws, panoPath, log));
+    await this.step(projectId, 'stitch-panorama', log, async () => {
+      // Stitch each face independently
+      for (const face of CUBE_FACES) {
+        const faceInput = path.join(ws.photos, face);
+        const faceOutput = path.join(ws.faces, `${face}.jpg`);
+        
+        // Only run if the face folder exists (which it should)
+        if (fs.existsSync(faceInput)) {
+          log.info(`Stitching face: ${face}`);
+          await this.stitchFace(faceInput, faceOutput, log);
+        }
+      }
+    });
 
-    await this.step(projectId, 'optimize-panorama', log, () =>
-      this.recordDimensions(projectId, panoPath, log),
-    );
+    await this.step(projectId, 'optimize-panorama', log, async () => {
+      for (const face of CUBE_FACES) {
+        const faceOutput = path.join(ws.faces, `${face}.jpg`);
+        this.assertExists(faceOutput, `stitched face ${face}`);
+      }
+      log.info('All 6 faces optimized and verified');
+    });
 
-    await this.step(projectId, 'store-output', log, () =>
-      this.storeOutput(projectId, panoPath, log),
-    );
+    await this.step(projectId, 'store-output', log, async () => {
+      const outDir = path.join(this.app.outputPath, projectId, 'faces');
+      fs.mkdirSync(outDir, { recursive: true });
+      
+      let totalSize = 0;
+      for (const face of CUBE_FACES) {
+        const src = path.join(ws.faces, `${face}.jpg`);
+        const dest = path.join(outDir, `${face}.jpg`);
+        fs.copyFileSync(src, dest);
+        totalSize += fs.statSync(dest).size;
+      }
+      
+      this.projects.update(projectId, {
+        facesPath: path.join(projectId, 'faces'),
+        cubemapReady: true,
+      });
+      log.info(`Stored 6 faces (${totalSize} bytes total) at ${outDir}`);
+    });
 
     this.projects.setStatus(projectId, 'completed');
-    log.info('Panorama pipeline completed successfully');
+    log.info('Cubemap pipeline completed successfully');
   }
 
-  private listPhotos(ws: PanoramaWorkspace): string[] {
-    if (!fs.existsSync(ws.photos)) return [];
-    return fs
-      .readdirSync(ws.photos)
-      .filter((f) => /\.(jpe?g|png)$/i.test(f))
-      .sort();
+  private countPhotos(dir: string): number {
+    if (!fs.existsSync(dir)) return 0;
+    let count = 0;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const res = path.resolve(dir, entry.name);
+      if (entry.isDirectory()) {
+        count += this.countPhotos(res);
+      } else if (/\.(jpe?g|png)$/i.test(entry.name)) {
+        count++;
+      }
+    }
+    return count;
   }
 
-  private stitch(ws: PanoramaWorkspace, panoPath: string, log: ProjectLogger): Promise<void> {
-    fs.mkdirSync(path.dirname(panoPath), { recursive: true });
-    const script = path.join(this.app.pipelineScriptsDir, 'stitch_panorama.py');
+  private stitchFace(inputDir: string, outputPath: string, log: ProjectLogger): Promise<void> {
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    const script = path.join(this.app.pipelineScriptsDir, 'stitch_cubemap.py');
     const args = [
       script,
       '--input',
-      ws.photos,
+      inputDir,
       '--output',
-      panoPath,
+      outputPath,
       '--max-dim',
       String(this.app.stitchMaxDim),
-      '--max-width',
-      String(this.app.panoramaMaxWidth),
     ];
-    // Device poses are optional: they rescue captures where feature matching
-    // alone cannot recover the rotations.
-    const posesFile = path.join(ws.root, 'poses.json');
-    if (fs.existsSync(posesFile)) {
-      args.push('--poses', posesFile);
-      log.info('Using device poses recorded during capture');
-    }
     
     // On Windows, 'python' is the standard executable, whereas 'python3' is common on Unix.
     const primaryCmd = process.platform === 'win32' ? 'python' : 'python3';
@@ -132,49 +152,6 @@ export class PanoramaService {
       }
       throw err;
     });
-  }
-
-  /**
-   * Records the stitched dimensions, which the stitcher writes alongside the
-   * image. The viewer checks these to confirm it received a 2:1 equirectangular
-   * before mapping it onto a sphere.
-   */
-  private async recordDimensions(
-    projectId: string,
-    panoPath: string,
-    log: ProjectLogger,
-  ): Promise<void> {
-    this.assertExists(panoPath, 'stitched panorama');
-    const { width, height } = this.readDimensions(panoPath);
-    this.projects.update(projectId, { panoramaWidth: width, panoramaHeight: height });
-    log.info(`Panorama is ${width}x${height} (aspect ${(width / height).toFixed(2)})`);
-  }
-
-  /** Reads the sidecar metadata emitted by `stitch_panorama.py`. */
-  private readDimensions(panoPath: string): { width: number; height: number } {
-    const sidecar = panoPath.replace(/\.jpg$/, '.json');
-    this.assertExists(sidecar, 'panorama metadata');
-    const meta = JSON.parse(fs.readFileSync(sidecar, 'utf8')) as {
-      width?: number;
-      height?: number;
-    };
-    if (!meta.width || !meta.height) throw new Error('Panorama metadata has no dimensions');
-    return { width: meta.width, height: meta.height };
-  }
-
-  private storeOutput(projectId: string, panoPath: string, log: ProjectLogger): Promise<void> {
-    this.assertExists(panoPath, 'panorama');
-    const outDir = path.join(this.app.outputPath, projectId);
-    fs.mkdirSync(outDir, { recursive: true });
-    const dest = path.join(outDir, 'panorama.jpg');
-    fs.copyFileSync(panoPath, dest);
-    const size = fs.statSync(dest).size;
-    this.projects.update(projectId, {
-      panoramaPath: path.join(projectId, 'panorama.jpg'),
-      panoramaSizeBytes: size,
-    });
-    log.info(`Stored panorama (${size} bytes) at ${dest}`);
-    return Promise.resolve();
   }
 
   private async step(

@@ -56,12 +56,10 @@ export interface Project {
   /** Per-step state, in execution order. */
   steps: PipelineStepState[];
 
-  /** Relative (to OUTPUT_PATH) path of the stitched photosphere. */
-  panoramaPath?: string;
-  panoramaSizeBytes?: number;
-  /** Pixel dimensions of the stitched panorama (equirectangular is 2:1). */
-  panoramaWidth?: number;
-  panoramaHeight?: number;
+  /** Relative (to OUTPUT_PATH) path to the directory containing the 6 stitched cubemap faces. */
+  facesPath?: string;
+  /** Whether the 6 cubemap faces have been successfully stitched. */
+  cubemapReady?: boolean;
   /** How many source photos were captured. */
   photoCount?: number;
 
@@ -72,8 +70,8 @@ export interface Project {
 /** Canonical ordered list of steps with human-readable labels. */
 export const PANORAMA_STEPS: ReadonlyArray<{ id: PipelineStepId; label: string }> = [
   { id: 'validate-photos', label: 'Validate photos' },
-  { id: 'stitch-panorama', label: 'Stitch photosphere' },
-  { id: 'optimize-panorama', label: 'Optimize panorama' },
+  { id: 'stitch-panorama', label: 'Stitch cubemap faces' },
+  { id: 'optimize-panorama', label: 'Optimize faces' },
   { id: 'store-output', label: 'Store output' },
 ] as const;
 

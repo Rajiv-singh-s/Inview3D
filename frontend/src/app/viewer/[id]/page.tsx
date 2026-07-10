@@ -58,16 +58,13 @@ export default function ViewerPage({ params }: { params: Promise<{ id: string }>
           </p>
         </div>
         <div className="flex gap-3">
-          <a href={api.panoramaUrl(id)} download className="btn-ghost">
-            Download panorama
-          </a>
           <Link href="/capture" className="btn-primary">
             New capture
           </Link>
         </div>
       </div>
 
-      <PhotosphereViewer url={api.panoramaUrl(id)} />
+      <PhotosphereViewer id={id} />
     </div>
   );
 }

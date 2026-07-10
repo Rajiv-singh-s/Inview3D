@@ -56,7 +56,7 @@ export default function CapturePage() {
       const res = await api.uploadCapture(
         shots.map((s) => s.blob),
         `Capture ${new Date().toLocaleString()}`,
-        shots.map((s) => ({ yaw: s.yaw, pitch: s.pitch })),
+        shots.map((s) => ({ yaw: s.yaw, pitch: s.pitch, face: s.face })),
       );
       router.push(`/processing/${res.id}`);
     } catch (err) {

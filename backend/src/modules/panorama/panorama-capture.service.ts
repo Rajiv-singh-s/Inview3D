@@ -13,6 +13,7 @@ const MIN_PHOTOS = 4;
 interface DevicePose {
   yaw: number;
   pitch: number;
+  face: string;
 }
 
 /**
@@ -33,8 +34,8 @@ export class PanoramaCaptureService {
   ) {}
 
   /**
-   * Parses the device poses that accompanied the photos. Never throws: a
-   * capture without usable poses still stitches, it just loses the fallback.
+   * Parses the device poses that accompanied the photos. For the cubemap pipeline,
+   * we expect exactly 18 poses, each specifying which cube face the photo belongs to.
    */
   private parsePoses(raw: string | undefined, expected: number): DevicePose[] | null {
     if (!raw) return null;
@@ -45,10 +46,10 @@ export class PanoramaCaptureService {
         return null;
       }
       const ok = parsed.every(
-        (p) => Number.isFinite(p?.yaw) && Number.isFinite(p?.pitch),
+        (p) => Number.isFinite(p?.yaw) && Number.isFinite(p?.pitch) && typeof p?.face === 'string',
       );
       if (!ok) {
-        this.logger.warn('Ignoring poses: contains non-finite values');
+        this.logger.warn('Ignoring poses: contains invalid values or missing face tag');
         return null;
       }
       return parsed;
@@ -63,41 +64,61 @@ export class PanoramaCaptureService {
     name?: string,
     posesRaw?: string,
   ): Promise<Project> {
-    if (!files || files.length < MIN_PHOTOS) {
+    if (!files || files.length !== 18) {
       throw new BadRequestException(
-        `Need at least ${MIN_PHOTOS} photos to build a photosphere, received ${files?.length ?? 0}.`,
+        `Need exactly 18 photos to build a cubemap (3 per face), received ${files?.length ?? 0}.`,
       );
     }
 
+    const poses = this.parsePoses(posesRaw, files.length);
+    if (!poses) {
+      throw new BadRequestException('Valid poses with face metadata are required for cubemap capture.');
+    }
+
     const project = this.projects.create({
-      originalName: name?.trim() || `Capture ${new Date().toLocaleString()}`,
+      originalName: name?.trim() || `Cube Capture ${new Date().toLocaleString()}`,
       originalPath: '',
       photoCount: files.length,
     });
 
     const ws = this.panorama.createWorkspace(project.id);
+    
+    // Create face subdirectories
+    const faces = ['front', 'back', 'left', 'right', 'top', 'bottom'];
+    for (const face of faces) {
+      fs.mkdirSync(path.join(ws.photos, face), { recursive: true });
+    }
+
+    const keyed: Array<{ file: string; face: string; yaw: number; pitch: number }> = [];
+
     files.forEach((file, index) => {
+      const pose = poses[index];
+      const face = pose.face.toLowerCase();
+      if (!faces.includes(face)) {
+         throw new BadRequestException(`Invalid face name: ${face}`);
+      }
+      
       const ext = this.extensionFor(file);
-      const dest = path.join(ws.photos, `photo_${String(index).padStart(3, '0')}${ext}`);
+      const filename = `photo_${String(index).padStart(3, '0')}${ext}`;
+      const dest = path.join(ws.photos, face, filename);
+      
       fs.writeFileSync(dest, file.buffer);
+      
+      keyed.push({
+        file: `${face}/${filename}`,
+        face,
+        yaw: pose.yaw,
+        pitch: pose.pitch,
+      });
     });
 
-    // Persist the device poses next to the photos, keyed by the same filenames
-    // the stitcher globs, so ordering can never drift between the two.
-    const poses = this.parsePoses(posesRaw, files.length);
-    if (poses) {
-      const keyed = files.map((file, index) => ({
-        file: `photo_${String(index).padStart(3, '0')}${this.extensionFor(file)}`,
-        yaw: poses[index].yaw,
-        pitch: poses[index].pitch,
-      }));
-      fs.writeFileSync(path.join(ws.root, 'poses.json'), JSON.stringify(keyed, null, 2), 'utf8');
-      this.logger.log(`Stored ${keyed.length} device poses for ${project.id}`);
-    }
+    // Persist the device poses next to the photos
+    fs.writeFileSync(path.join(ws.root, 'poses.json'), JSON.stringify(keyed, null, 2), 'utf8');
+    this.logger.log(`Stored ${keyed.length} device poses for ${project.id}`);
 
     this.projects.update(project.id, { originalPath: ws.photos, status: 'queued' });
     await this.queue.enqueue(project.id);
-    this.logger.log(`Panorama project ${project.id} queued with ${files.length} photos`);
+    this.logger.log(`Cubemap project ${project.id} queued with ${files.length} photos`);
 
     return this.projects.findOne(project.id);
   }

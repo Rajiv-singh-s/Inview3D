@@ -43,16 +43,12 @@ export class ProjectsController {
   @Get('viewer/:id')
   viewer(@Param('id') id: string) {
     const p = this.projects.findOne(id);
-    if (p.status !== 'completed' || !p.panoramaPath) {
-      throw new NotFoundException('This photosphere is not ready yet');
+    if (p.status !== 'completed' || !p.cubemapReady) {
+      throw new NotFoundException('This cubemap is not ready yet');
     }
     return {
       id: p.id,
       originalName: p.originalName,
-      panoramaUrl: `/panorama/${p.id}`,
-      panoramaSizeBytes: p.panoramaSizeBytes,
-      width: p.panoramaWidth,
-      height: p.panoramaHeight,
       photoCount: p.photoCount,
       completedAt: p.updatedAt,
     };

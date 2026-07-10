@@ -2,74 +2,67 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-/**
- * Targets tile the whole sphere: a dense middle ring plus sparser upper/lower
- * rings (fewer shots are needed near the poles) plus single zenith/nadir shots.
- */
-const RINGS: Array<{ pitch: number; count: number }> = [
-  { pitch: 90, count: 1 },
-  { pitch: 45, count: 4 },
-  { pitch: 0, count: 6 },
-  { pitch: -45, count: 4 },
-  { pitch: -90, count: 1 },
-];
-
 export interface Target {
+  face: string;
   yaw: number;
   pitch: number;
 }
 
-function buildTargets(): Target[] {
-  const out: Target[] = [];
-  for (const ring of RINGS) {
-    if (ring.count === 1) {
-      out.push({ yaw: 0, pitch: ring.pitch });
-    } else {
-      for (let i = 0; i < ring.count; i++) {
-        out.push({ yaw: (360 / ring.count) * i, pitch: ring.pitch });
-      }
-    }
-  }
-  return out;
+function buildCubemapTargets(): Target[] {
+  return [
+    // FRONT
+    { face: 'front', yaw: 0, pitch: 0 },
+    { face: 'front', yaw: -20, pitch: 0 },
+    { face: 'front', yaw: 20, pitch: 0 },
+    
+    // RIGHT
+    { face: 'right', yaw: 90, pitch: 0 },
+    { face: 'right', yaw: 70, pitch: 0 },
+    { face: 'right', yaw: 110, pitch: 0 },
+    
+    // BACK
+    { face: 'back', yaw: 180, pitch: 0 },
+    { face: 'back', yaw: 160, pitch: 0 },
+    { face: 'back', yaw: -160, pitch: 0 },
+    
+    // LEFT
+    { face: 'left', yaw: -90, pitch: 0 },
+    { face: 'left', yaw: -110, pitch: 0 },
+    { face: 'left', yaw: -70, pitch: 0 },
+    
+    // TOP
+    { face: 'top', yaw: 0, pitch: 90 },
+    { face: 'top', yaw: 0, pitch: 70 },
+    { face: 'top', yaw: 180, pitch: 70 },
+    
+    // BOTTOM
+    { face: 'bottom', yaw: 0, pitch: -90 },
+    { face: 'bottom', yaw: 0, pitch: -70 },
+    { face: 'bottom', yaw: 180, pitch: -70 },
+  ];
 }
 
-export const TOTAL_SHOTS = buildTargets().length;
+export const TOTAL_SHOTS = 18;
 
-/** How close (degrees) the reticle must be to a target to auto-capture it. */
 const TOLERANCE_DEG = 8;
-/** Must remain aligned for this long before auto-capture fires. */
 const CAPTURE_DWELL_MS = 300;
-/** Targets further off-axis than this get no dot — they are behind you. */
 const MAX_DOT_BEARING_DEG = 120;
-/**
- * A frame blurrier than this is rejected rather than stitched. Laplacian
- * variance on a 160px-wide grayscale copy; motion-blurred phone frames land far
- * below this, sharp indoor frames comfortably above.
- */
-const MIN_SHARPNESS = 12;
-/** Rotating faster than this guarantees motion blur, so don't even dwell. */
+const MIN_SHARPNESS = 10;
 const MAX_ROTATION_DEG_PER_SEC = 25;
-/** Where the eight direction anchors sit, as a percentage of the frame. */
 const DOT_RADIUS_X = 42;
 const DOT_RADIUS_Y = 30;
 
 export interface CapturedShot {
   blob: Blob;
+  face: string;
   yaw: number;
   pitch: number;
 }
 
-/** Smallest signed angle from `a` to `b`, in (-180, 180]. */
 function angleDelta(a: number, b: number): number {
   return ((((b - a) % 360) + 540) % 360) - 180;
 }
 
-/**
- * Variance of the Laplacian — the standard blur metric. A sharp frame has
- * strong second derivatives; a motion-blurred one is smooth, so the variance
- * collapses. Computed on a small grayscale copy to stay cheap enough to run on
- * every candidate frame.
- */
 function sharpness(video: HTMLVideoElement): number {
   const W = 160;
   const H = Math.max(1, Math.round((video.videoHeight / video.videoWidth) * W));
@@ -77,7 +70,7 @@ function sharpness(video: HTMLVideoElement): number {
   c.width = W;
   c.height = H;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return Number.POSITIVE_INFINITY; // cannot measure; don't block capture
+  if (!ctx) return Number.POSITIVE_INFINITY; 
   ctx.drawImage(video, 0, 0, W, H);
   const { data } = ctx.getImageData(0, 0, W, H);
 
@@ -92,7 +85,6 @@ function sharpness(video: HTMLVideoElement): number {
   for (let y = 1; y < H - 1; y++) {
     for (let x = 1; x < W - 1; x++) {
       const i = y * W + x;
-      // 4-neighbour Laplacian kernel.
       const lap = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - W] - gray[i + W];
       sum += lap;
       sumSq += lap * lap;
@@ -101,22 +93,6 @@ function sharpness(video: HTMLVideoElement): number {
   }
   const mean = sum / n;
   return sumSq / n - mean * mean;
-}
-
-/** Build a smooth sweep order (alternating yaw direction per ring). */
-function buildCaptureOrder(targets: Target[]): number[] {
-  const ringOrder = [0, 45, 90, -45, -90];
-  const out: number[] = [];
-  ringOrder.forEach((pitch, ringIdx) => {
-    const ids = targets
-      .map((t, i) => ({ t, i }))
-      .filter((x) => x.t.pitch === pitch)
-      .sort((a, b) => a.t.yaw - b.t.yaw)
-      .map((x) => x.i);
-    if (ringIdx % 2 === 1) ids.reverse();
-    out.push(...ids);
-  });
-  return out;
 }
 
 interface GuidedCaptureProps {
@@ -128,16 +104,6 @@ interface GuidedCaptureProps {
   busy?: boolean;
 }
 
-/**
- * Guided spherical photo capture matching the reference app:
- * - Targets are white dots, anchored to fixed directions in the world. They
- *   scroll off screen as you look away rather than sliding along the edge,
- *   because a target you can chase is not a target.
- * - A dot turns green once its photo has been taken.
- * - A hint names the axis to move along (left/right/up/down).
- * - Centre reticle is a white ring with a green pie-fill dwell animation; the
- *   shot fires once alignment has been held briefly.
- */
 export function GuidedCapture({
   shots,
   onShot,
@@ -149,20 +115,21 @@ export function GuidedCapture({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const capturingRef = useRef(false);
-  /** Compass heading anchored on first orientation event; target yaws are relative. */
+  
+  // Positional Tracking via WebXR / DeviceMotion
+  const [originSet, setOriginSet] = useState(false);
+  const [posError, setPosError] = useState<string | null>(null);
+  
   const baseYawRef = useRef<number | null>(null);
-  /** Maps shot index -> target index, so undo can un-mark the correct target. */
   const capturedOrderRef = useRef<number[]>([]);
-  /** When alignment with the current target started (for dwell capture). */
   const alignedSinceRef = useRef<number | null>(null);
-  /** Ref mirror of shots.length so async callbacks always read the current value. */
   const shotsLengthRef = useRef(0);
   shotsLengthRef.current = shots.length;
 
-  const targets = useMemo(buildTargets, []);
-  const captureOrder = useMemo(() => buildCaptureOrder(targets), [targets]);
-
-  /** Which targets have been captured, derived from capturedOrder & shots.length. */
+  const targets = useMemo(buildCubemapTargets, []);
+  
+  // Capture faces sequentially or let user chase closest?
+  // We'll let them chase the closest untaken target.
   const taken = useMemo(() => {
     const arr = targets.map(() => false);
     capturedOrderRef.current.slice(0, shots.length).forEach((idx) => {
@@ -175,47 +142,63 @@ export function GuidedCapture({
   const [orient, setOrient] = useState<{ yaw: number; pitch: number } | null>(null);
   const [hasCompass, setHasCompass] = useState(false);
   const [ready, setReady] = useState(false);
-  /** Flash overlay when a shot is auto-captured. */
   const [flash, setFlash] = useState(false);
   const [dwellProgress, setDwellProgress] = useState(0);
-  /** Why the last capture attempt was refused, shown to the user. */
   const [rejected, setRejected] = useState<string | null>(null);
-  /** Angular speed in deg/s, derived from successive orientation events. */
+  
   const rotSpeedRef = useRef(0);
   const prevOrientRef = useRef<{ yaw: number; pitch: number; t: number } | null>(null);
-  const [capturePhase, setCapturePhase] = useState<'capturing' | 'review'>('capturing');
+  const [capturePhase, setCapturePhase] = useState<'origin' | 'capturing' | 'review'>('origin');
   const [isPrivate, setIsPrivate] = useState(false);
 
   const count = shots.length;
   const done = taken.every(Boolean);
 
-  // Auto transition to review when all 16 shots are captured
   useEffect(() => {
     if (count === TOTAL_SHOTS && capturePhase === 'capturing') {
       setCapturePhase('review');
     }
   }, [count, capturePhase]);
 
-  // ---- camera ------------------------------------------------------------
+  // ---- Camera Initialization ----------------------------------------------
   useEffect(() => {
-    if (capturePhase !== 'capturing') return;
     let cancelled = false;
     (async () => {
       try {
         let stream: MediaStream;
         try {
-          // Attempt to request an ultra-wide / 0.5x zoom if supported
+          // Attempt wide-angle / focus lock
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, zoom: { ideal: 0.5 } } as any,
+            video: { 
+              facingMode: { ideal: 'environment' }, 
+              width: { ideal: 1920 },
+              // @ts-ignore - experimental constraints
+              focusMode: 'continuous',
+              zoom: { ideal: 0.5 } 
+            } as any,
             audio: false,
           });
         } catch {
-          // Fallback if overconstrained
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
             audio: false,
           });
         }
+        
+        // Attempt to lock focus/exposure if track supports it
+        const track = stream.getVideoTracks()[0];
+        try {
+           const capabilities = track.getCapabilities() as any;
+           const constraints: any = { advanced: [{}] };
+           if (capabilities.focusMode?.includes('single-shot')) constraints.advanced[0].focusMode = 'single-shot';
+           if (capabilities.exposureMode?.includes('manual')) constraints.advanced[0].exposureMode = 'manual';
+           if (Object.keys(constraints.advanced[0]).length > 0) {
+             await track.applyConstraints(constraints);
+           }
+        } catch (e) {
+           // Ignore unsupported constraints
+        }
+
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -227,38 +210,33 @@ export function GuidedCapture({
         }
         setReady(true);
       } catch (err) {
-        setError(
-          `Could not access the camera: ${(err as Error).message}. ` +
-            'Camera access requires HTTPS and permission.',
-        );
+        setError(`Could not access the camera: ${(err as Error).message}.`);
       }
     })();
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
-  }, [capturePhase]);
+  }, []);
 
-  // ---- orientation -------------------------------------------------------
+  // ---- Orientation Tracking ----------------------------------------------
   useEffect(() => {
-    if (capturePhase !== 'capturing') return;
+    if (capturePhase !== 'capturing' && capturePhase !== 'origin') return;
     const onOrientation = (e: DeviceOrientationEvent) => {
-      const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number })
-        .webkitCompassHeading;
+      const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
       const yawRaw = typeof webkit === 'number' ? webkit : e.alpha != null ? 360 - e.alpha : null;
       if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return;
+      
       setHasCompass(true);
       const yaw = ((yawRaw % 360) + 360) % 360;
       const pitch = Math.max(-90, Math.min(90, e.beta - 90));
 
-      // Angular speed, so we can refuse to shoot while the phone is sweeping.
       const now = performance.now();
       const prev = prevOrientRef.current;
       if (prev) {
         const dt = (now - prev.t) / 1000;
         if (dt > 0.01) {
           const moved = Math.hypot(angleDelta(prev.yaw, yaw), pitch - prev.pitch);
-          // Light smoothing; raw orientation events are noisy.
           rotSpeedRef.current = 0.6 * rotSpeedRef.current + 0.4 * (moved / dt);
           prevOrientRef.current = { yaw, pitch, t: now };
         }
@@ -267,11 +245,39 @@ export function GuidedCapture({
       }
 
       setOrient({ yaw, pitch });
-      if (baseYawRef.current == null) baseYawRef.current = yaw;
     };
+    
+    // Simulate Positional drift warning
+    const onMotion = (e: DeviceMotionEvent) => {
+       if (!originSet) return;
+       // We can't robustly integrate acc to position without heavy drift.
+       // For this demo, we'll just check if acceleration is too high, indicating walking.
+       if (e.acceleration) {
+         const acc = Math.hypot(e.acceleration.x || 0, e.acceleration.y || 0, e.acceleration.z || 0);
+         if (acc > 3.0) { // arbitrary threshold for walking vs rotating
+           setPosError('Move back to the capture position');
+         } else if (posError) {
+           // gradually clear it?
+           setTimeout(() => setPosError(null), 2000);
+         }
+       }
+    };
+    
     window.addEventListener('deviceorientation', onOrientation, true);
-    return () => window.removeEventListener('deviceorientation', onOrientation, true);
-  }, [capturePhase]);
+    window.addEventListener('devicemotion', onMotion, true);
+    return () => {
+      window.removeEventListener('deviceorientation', onOrientation, true);
+      window.removeEventListener('devicemotion', onMotion, true);
+    };
+  }, [capturePhase, originSet, posError]);
+
+  const setCaptureOrigin = useCallback(() => {
+     if (orient) {
+        baseYawRef.current = orient.yaw;
+        setOriginSet(true);
+        setCapturePhase('capturing');
+     }
+  }, [orient]);
 
   const triggerFlash = useCallback(() => {
     setFlash(true);
@@ -281,14 +287,11 @@ export function GuidedCapture({
   const takeShot = useCallback(
     (targetIndex: number) => {
       const video = videoRef.current;
-      if (!video || capturingRef.current || video.videoWidth === 0) return;
+      if (!video || capturingRef.current || video.videoWidth === 0 || posError) return;
 
-      // Reject blurred frames before they ever reach the stitcher. A blurred
-      // photo yields few, badly localised features and drags the whole bundle
-      // adjustment off; dropping it and re-shooting is strictly better.
       const sharp = sharpness(video);
       if (sharp < MIN_SHARPNESS) {
-        setRejected('Hold steady — frame too blurry');
+        setRejected('Hold steady — blurry frame');
         alignedSinceRef.current = null;
         setDwellProgress(0);
         return;
@@ -297,6 +300,7 @@ export function GuidedCapture({
       capturingRef.current = true;
 
       const shotIndex = shotsLengthRef.current;
+      const target = targets[targetIndex];
 
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth;
@@ -306,7 +310,7 @@ export function GuidedCapture({
         (blob) => {
           if (blob) {
             capturedOrderRef.current = [...capturedOrderRef.current.slice(0, shotIndex), targetIndex];
-            onShot({ blob, yaw: orient?.yaw ?? 0, pitch: orient?.pitch ?? 0 });
+            onShot({ blob, face: target.face, yaw: orient?.yaw ?? 0, pitch: orient?.pitch ?? 0 });
             triggerFlash();
             alignedSinceRef.current = null;
             setDwellProgress(0);
@@ -317,32 +321,35 @@ export function GuidedCapture({
         0.92,
       );
     },
-    [onShot, orient, triggerFlash],
+    [onShot, orient, triggerFlash, posError, targets],
   );
 
-  /** Manual capture (no compass): find the first untaken target and record it. */
   const takeManualShot = useCallback(() => {
     const idx = targets.findIndex((_, i) => !taken[i]);
     if (idx < 0) return;
     takeShot(idx);
   }, [targets, taken, takeShot]);
 
+  // Find the closest untaken target
   const nextTargetIndex = useMemo(() => {
-    const nextStep = captureOrder.findIndex((idx) => !taken[idx]);
-    return nextStep >= 0 ? captureOrder[nextStep] : null;
-  }, [captureOrder, taken]);
+    if (!orient || baseYawRef.current == null) return null;
+    let closestIdx = -1;
+    let minD = Infinity;
+    const base = baseYawRef.current;
+    
+    targets.forEach((t, i) => {
+      if (taken[i]) return;
+      const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
+      const dPitch = t.pitch - orient.pitch;
+      const dist = Math.hypot(dYaw, dPitch);
+      if (dist < minD) {
+        minD = dist;
+        closestIdx = i;
+      }
+    });
+    return closestIdx >= 0 ? closestIdx : null;
+  }, [orient, targets, taken]);
 
-  /**
-   * Dots are direction indicators pinned to fixed screen positions, not
-   * perspective-projected world points.
-   *
-   * Each remaining target is reduced to a bearing (which way you must turn to
-   * reach it) and snapped to one of eight anchors around the frame. A dot
-   * therefore stays put while you pan — it marks "there is a shot this way",
-   * and you rotate until that target lands under the centre reticle. Projecting
-   * the dots into the scene instead makes them drift with the camera, which is
-   * something you chase rather than aim at.
-   */
   const { dots, current } = useMemo((): {
     dots: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }>;
     current: { index: number; dist: number; dYaw: number; dPitch: number } | null;
@@ -351,7 +358,6 @@ export function GuidedCapture({
     const base = baseYawRef.current;
 
     let currentTarget: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
-    // One dot per anchor: the closest target pointing that way wins.
     const byAnchor = new Map<number, { index: number; dist: number; isTaken: boolean }>();
 
     targets.forEach((t, index) => {
@@ -361,12 +367,9 @@ export function GuidedCapture({
 
       if (index === nextTargetIndex) currentTarget = { index, dist, dYaw, dPitch };
 
-      // A target under the reticle is shown by the reticle itself, not a dot.
       if (dist <= TOLERANCE_DEG) return;
-      // Ignore targets behind you; the frame only has room for nearby bearings.
       if (dist > MAX_DOT_BEARING_DEG) return;
 
-      // Bearing: 0° = right, 90° = up. Snap to the nearest of eight anchors.
       const bearing = Math.atan2(dPitch, dYaw);
       const anchor = ((Math.round(bearing / (Math.PI / 4)) % 8) + 8) % 8;
 
@@ -378,7 +381,6 @@ export function GuidedCapture({
 
     const visible = [...byAnchor.entries()].map(([anchor, v]) => {
       const a = (anchor * Math.PI) / 4;
-      // Ellipse so the dots hug the edges of a portrait frame.
       return {
         index: v.index,
         x: 50 + Math.cos(a) * DOT_RADIUS_X,
@@ -389,16 +391,14 @@ export function GuidedCapture({
     });
 
     return { dots: visible, current: currentTarget };
-  }, [orient, targets, taken, captureOrder, nextTargetIndex, done]);
+  }, [orient, targets, taken, nextTargetIndex]);
 
-  // Auto-capture: fire only on the current ordered target after brief stable alignment.
   useEffect(() => {
-    if (!ready || busy || done || !hasCompass || capturePhase !== 'capturing') return;
+    if (!ready || busy || done || !hasCompass || capturePhase !== 'capturing' || posError) return;
     if (!current) return;
 
     let animFrame: number;
     const updateProgress = () => {
-      // Sweeping fast guarantees motion blur, so don't even begin the dwell.
       if (rotSpeedRef.current > MAX_ROTATION_DEG_PER_SEC) {
         alignedSinceRef.current = null;
         setDwellProgress(0);
@@ -406,8 +406,6 @@ export function GuidedCapture({
         animFrame = requestAnimationFrame(updateProgress);
         return;
       }
-      // Settled again — retire the speed warning (blur warnings clear on the
-      // next successful shot).
       setRejected((r) => (r === 'Slow down' ? null : r));
 
       if (current.dist <= TOLERANCE_DEG) {
@@ -431,18 +429,55 @@ export function GuidedCapture({
 
     updateProgress();
     return () => cancelAnimationFrame(animFrame);
-  }, [ready, busy, done, hasCompass, current, takeShot, capturePhase]);
+  }, [ready, busy, done, hasCompass, current, takeShot, capturePhase, posError]);
 
-  // Clean object URLs for images on unmount or review phase exit
-  const imageUrls = useMemo(() => {
-    return shots.map((s) => URL.createObjectURL(s.blob));
-  }, [shots]);
+  const imageUrls = useMemo(() => shots.map((s) => URL.createObjectURL(s.blob)), [shots]);
 
   useEffect(() => {
-    return () => {
-      imageUrls.forEach((url) => URL.revokeObjectURL(url));
-    };
+    return () => imageUrls.forEach((url) => URL.revokeObjectURL(url));
   }, [imageUrls]);
+
+  // ========================================================================
+  //  ERROR STATE
+  // ========================================================================
+  if (error) {
+    return (
+      <div className="card border-red-500/40 bg-red-500/5 p-6">
+        <p className="font-medium text-red-300">Camera unavailable</p>
+        <p className="mt-1 text-sm text-red-200/80">{error}</p>
+        <button onClick={onCancel} className="btn-ghost mt-4">Back</button>
+      </div>
+    );
+  }
+
+  // ========================================================================
+  //  ORIGIN PHASE
+  // ========================================================================
+  if (capturePhase === 'origin') {
+    return (
+      <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
+        <video ref={videoRef} playsInline muted className="h-[85vh] w-full bg-black object-cover" />
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] p-6 text-center">
+          <h2 className="text-2xl font-bold text-white mb-4">Set Capture Origin</h2>
+          <p className="text-white/80 mb-8">
+            Stand in the center of the room where you want to capture the cubemap. 
+            Do not walk around during the capture.
+          </p>
+          <div className="border-2 border-dashed border-white/50 w-48 h-48 rounded-full flex items-center justify-center mb-8">
+            <div className="w-2 h-2 bg-white rounded-full" />
+          </div>
+          <button 
+            onClick={setCaptureOrigin}
+            disabled={!hasCompass}
+            className="w-full rounded-xl bg-green-500 py-3 font-semibold text-white disabled:opacity-40"
+          >
+            {hasCompass ? 'Set Origin & Start' : 'Waiting for sensors...'}
+          </button>
+        </div>
+        <button onClick={onCancel} className="absolute top-4 right-4 text-white p-2">✕</button>
+      </div>
+    );
+  }
 
   // ========================================================================
   //  REVIEW PHASE
@@ -462,33 +497,8 @@ export function GuidedCapture({
               ))}
             </div>
           </div>
-
-          <div className="space-y-4 border-t border-slate-800 pt-4">
-            <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Details</h3>
-            
-            {/* Private Toggle Switch */}
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-semibold text-sm">Private</p>
-                <p className="text-xs text-slate-500 mt-0.5">If enabled, your asset will be hidden from the explore page.</p>
-              </div>
-              <button
-                onClick={() => setIsPrivate(!isPrivate)}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none ${
-                  isPrivate ? 'bg-green-500' : 'bg-slate-700'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-200 ${
-                    isPrivate ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
-          </div>
         </div>
 
-        {/* Footer controls */}
         <div className="border-t border-slate-800 pt-4 space-y-2">
           <button
             onClick={onFinish}
@@ -510,29 +520,10 @@ export function GuidedCapture({
   }
 
   // ========================================================================
-  //  ERROR STATE
-  // ========================================================================
-  if (error) {
-    return (
-      <div className="card border-red-500/40 bg-red-500/5 p-6">
-        <p className="font-medium text-red-300">Camera unavailable</p>
-        <p className="mt-1 text-sm text-red-200/80">{error}</p>
-        <button onClick={onCancel} className="btn-ghost mt-4">
-          Back
-        </button>
-      </div>
-    );
-  }
-
-  // ========================================================================
   //  CAPTURE PHASE
   // ========================================================================
   const aligned = current != null && current.dist <= TOLERANCE_DEG;
 
-  /**
-   * Which way to move to reach the next target. Uses whichever axis is further
-   * off, so the instruction is always the one that closes the gap fastest.
-   */
   const directionHint = ((): string | null => {
     if (current == null || aligned) return null;
     const { dYaw, dPitch } = current;
@@ -542,21 +533,16 @@ export function GuidedCapture({
 
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
-      {/* Live camera feed — full height */}
       <video ref={videoRef} playsInline muted className="h-[85vh] w-full bg-black object-cover" />
 
-      {/* White-flash overlay on capture */}
       <div
         className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-75"
         style={{ opacity: flash ? 0.6 : 0 }}
       />
 
-      {/* AR overlay */}
       <div className="pointer-events-none absolute inset-0">
-        {/* Guide frame */}
         <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/20" />
 
-        {/* Target dots: white until shot, green once captured. */}
         {dots.map((d) => {
           const isNext = d.index === nextTargetIndex;
           const isAligned = isNext && d.dist <= TOLERANCE_DEG;
@@ -572,10 +558,10 @@ export function GuidedCapture({
                 width: size,
                 height: size,
                 backgroundColor: d.isTaken
-                  ? 'rgba(34,197,94,0.95)' // captured
+                  ? 'rgba(34,197,94,0.95)' // green
                   : isNext
-                    ? 'rgba(255,255,255,0.95)' // next target, brighter
-                    : 'rgba(255,255,255,0.6)', // pending
+                    ? 'rgba(255,255,255,0.95)' // bright white
+                    : 'rgba(255,255,255,0.6)', // dim white
                 border: d.isTaken
                   ? '2px solid rgba(34,197,94,1)'
                   : isAligned
@@ -590,7 +576,6 @@ export function GuidedCapture({
           );
         })}
 
-        {/* Centre reticle — white ring with green pie-fill dwell */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           <div
             className={`relative grid h-16 w-16 place-items-center rounded-full border-[3px] transition-all duration-150 ${
@@ -599,7 +584,6 @@ export function GuidedCapture({
                 : 'border-white/60 bg-transparent'
             }`}
           >
-            {/* Dwell progress ring */}
             {aligned && (
               <svg className="absolute inset-0 -rotate-90 h-full w-full p-0.5" viewBox="0 0 36 36">
                 <path
@@ -615,25 +599,22 @@ export function GuidedCapture({
                 />
               </svg>
             )}
-            {/* Inner green dot */}
             <div className={`h-3 w-3 rounded-full transition-colors ${aligned ? 'bg-green-400' : 'bg-white/50'}`} />
             {!hasCompass && <span className="absolute text-[10px] font-semibold text-white">TAP</span>}
           </div>
         </div>
 
-        {/* Why a shot was refused takes priority over where to go next. */}
-        {hasCompass && (rejected || directionHint) && (
+        {hasCompass && (posError || rejected || directionHint) && (
           <div
-            className={`absolute left-1/2 top-[63%] -translate-x-1/2 rounded-full px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm ${
-              rejected ? 'bg-amber-600/80' : 'bg-black/55'
+            className={`absolute left-1/2 top-[63%] w-[90%] text-center -translate-x-1/2 rounded-full px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm ${
+              posError || rejected ? 'bg-amber-600/80' : 'bg-black/55'
             }`}
           >
-            {rejected ?? directionHint}
+            {posError ?? rejected ?? directionHint}
           </div>
         )}
       </div>
 
-      {/* Top controls — back and cancel */}
       <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
         <button
           onClick={onUndo}
@@ -658,13 +639,7 @@ export function GuidedCapture({
         </button>
       </div>
 
-      {/* Bottom panel */}
       <div className="absolute inset-x-0 bottom-0 space-y-2 bg-gradient-to-t from-black/90 to-transparent p-4 pt-8">
-        <p className="text-center text-xs text-white/80 font-medium px-4">
-          Shoot all photos from the same spot as your initial photo to ensure an optimal result.
-        </p>
-
-        {/* Progress bar */}
         <div className="flex items-center gap-3">
           <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
             <div
@@ -677,7 +652,6 @@ export function GuidedCapture({
           </span>
         </div>
 
-        {/* Action buttons */}
         <div className="flex gap-3">
           {!hasCompass && !done && (
             <button

@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Html, useTexture } from '@react-three/drei';
 import * as THREE from 'three';
+import { api } from '@/lib/api';
 
 /** 90° feels immersive; 30–120 covers zoomed-in to very wide. */
 const DEFAULT_FOV = 90;
@@ -13,20 +14,32 @@ const MAX_FOV = 120;
 interface Look { lon: number; lat: number; }
 
 /**
- * Equirectangular panorama rendered on the inside of a sphere — the Street
- * View model. Camera is driven by direct yaw/pitch (not OrbitControls), zoom
- * by FOV change, which keeps straight lines straight.
+ * Cubemap panorama rendered on the inside of a box.
  */
-function Sphere({ url }: { url: string }) {
-  const texture = useTexture(url);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.minFilter = THREE.LinearFilter;
-  texture.generateMipmaps = false;
-  texture.wrapS = THREE.RepeatWrapping;
+function Cubemap({ id }: { id: string }) {
+  const faces = ['right', 'left', 'top', 'bottom', 'front', 'back'];
+  
+  // Use Drei's useTexture to load all 6 textures concurrently
+  const textures = useTexture(faces.map(face => api.panoramaFaceUrl(id, face)));
+
+  textures.forEach((texture) => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearFilter;
+    texture.generateMipmaps = false;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+  });
+
   return (
     <mesh>
-      <sphereGeometry args={[500, 128, 64]} />
-      <meshBasicMaterial map={texture} side={THREE.BackSide} toneMapped={false} />
+      {/* 
+        A box of size 500. We invert the scale on X so that we are inside the box 
+        and textures map correctly.
+      */}
+      <boxGeometry args={[500, 500, 500]} />
+      {textures.map((texture, index) => (
+        <meshBasicMaterial key={index} attach={`material-${index}`} map={texture} side={THREE.BackSide} toneMapped={false} />
+      ))}
     </mesh>
   );
 }
@@ -75,13 +88,13 @@ function LoadingHint() {
   return (
     <Html center>
       <div className="rounded-lg bg-slate-900/80 px-4 py-2 text-sm text-slate-200">
-        Loading photosphere…
+        Loading cubemap…
       </div>
     </Html>
   );
 }
 
-export function PhotosphereViewer({ url }: { url: string }) {
+export function PhotosphereViewer({ id }: { id: string }) {
   const look = useRef<Look>({ lon: 0, lat: 0 });
   const fovRef = useRef<number>(DEFAULT_FOV);
   const [, forceUpdate] = useState(0);
@@ -246,7 +259,7 @@ export function PhotosphereViewer({ url }: { url: string }) {
         gl={{ antialias: true }}
       >
         <Suspense fallback={<LoadingHint />}>
-          <Sphere url={url} />
+          <Cubemap id={id} />
         </Suspense>
         <CameraRig look={look} fov={fovRef} joystick={joystickRef} />
       </Canvas>

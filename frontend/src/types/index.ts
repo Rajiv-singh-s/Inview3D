@@ -28,7 +28,6 @@ export interface Project {
   updatedAt: string;
   originalName: string;
   steps: PipelineStepState[];
-  panoramaSizeBytes?: number;
   photoCount?: number;
   error?: string;
 }
@@ -42,14 +41,10 @@ export interface StatusResponse {
   updatedAt: string;
 }
 
-/** Metadata the photosphere viewer needs. An equirectangular image is 2:1. */
+/** Metadata the cubemap viewer needs. */
 export interface ViewerMetadata {
   id: string;
   originalName: string;
-  panoramaUrl: string;
-  panoramaSizeBytes?: number;
-  width?: number;
-  height?: number;
   photoCount?: number;
   completedAt: string;
 }

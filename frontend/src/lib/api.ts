@@ -64,7 +64,7 @@ export const api = {
     photos: Blob[],
     name: string,
     /** Device orientation per photo, in capture order. Same length as `photos`. */
-    poses: Array<{ yaw: number; pitch: number }>,
+    poses: Array<{ yaw: number; pitch: number; face: string }>,
     onProgress?: (percent: number) => void,
     signal?: AbortSignal,
   ): Promise<CaptureResponse> {
@@ -109,6 +109,6 @@ export const api = {
   deleteProject: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/project/${id}`, { method: 'DELETE' }),
 
-  /** Absolute URL of the stitched photosphere for a completed project. */
-  panoramaUrl: (id: string) => `${getApiBaseUrl()}/panorama/${id}`,
+  /** Absolute URL of the stitched cubemap face for a completed project. */
+  panoramaFaceUrl: (id: string, face: string) => `${getApiBaseUrl()}/panorama/${id}/faces/${face}`,
 };

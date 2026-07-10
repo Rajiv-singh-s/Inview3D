@@ -56,16 +56,22 @@ export class PanoramaController {
     };
   }
 
-  /** GET /panorama/:id — stream the stitched photosphere JPEG. */
-  @Get('panorama/:id')
+  /** GET /panorama/:id/faces/:face — stream the stitched cubemap face JPEG. */
+  @Get('panorama/:id/faces/:face')
   @Header('Content-Type', 'image/jpeg')
   @Header('Cache-Control', 'public, max-age=31536000, immutable')
-  panorama(@Param('id') id: string, @Res({ passthrough: true }) res: Response): StreamableFile {
+  panoramaFace(
+    @Param('id') id: string,
+    @Param('face') face: string,
+    @Res({ passthrough: true }) res: Response
+  ): StreamableFile {
     const project = this.projects.findOne(id);
-    if (!project.panoramaPath) throw new NotFoundException('No panorama available yet');
-    const abs = path.join(this.outputPath, project.panoramaPath);
-    if (!fs.existsSync(abs)) throw new NotFoundException('Panorama file is missing on disk');
-    res.set('Content-Disposition', `inline; filename="${id}.jpg"`);
+    if (!project.facesPath || !project.cubemapReady) {
+      throw new NotFoundException('Cubemap is not available yet');
+    }
+    const abs = path.join(this.outputPath, project.facesPath, `${face}.jpg`);
+    if (!fs.existsSync(abs)) throw new NotFoundException(`Face ${face} is missing on disk`);
+    res.set('Content-Disposition', `inline; filename="${id}_${face}.jpg"`);
     return new StreamableFile(fs.createReadStream(abs));
   }
 }
