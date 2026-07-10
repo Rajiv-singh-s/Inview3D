@@ -78,7 +78,7 @@ export class PanoramaService {
         // Only run if the face folder exists (which it should)
         if (fs.existsSync(faceInput)) {
           log.info(`Stitching face: ${face}`);
-          await this.stitchFace(faceInput, faceOutput, log);
+          await this.stitchFace(faceInput, faceOutput, path.join(ws.root, 'poses.json'), face, log);
         }
       }
     });
@@ -129,7 +129,7 @@ export class PanoramaService {
     return count;
   }
 
-  private stitchFace(inputDir: string, outputPath: string, log: ProjectLogger): Promise<void> {
+  private stitchFace(inputDir: string, outputPath: string, posesPath: string, face: string, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     const script = path.join(this.app.pipelineScriptsDir, 'stitch_cubemap.py');
     const args = [
@@ -138,6 +138,10 @@ export class PanoramaService {
       inputDir,
       '--output',
       outputPath,
+      '--poses',
+      posesPath,
+      '--face',
+      face,
       '--max-dim',
       String(this.app.stitchMaxDim),
     ];

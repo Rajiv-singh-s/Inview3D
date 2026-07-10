@@ -150,6 +150,7 @@ export function GuidedCapture({
   const prevOrientRef = useRef<{ yaw: number; pitch: number; t: number } | null>(null);
   const [capturePhase, setCapturePhase] = useState<'origin' | 'capturing' | 'review'>('origin');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [isPortrait, setIsPortrait] = useState(true);
 
   const count = shots.length;
   const done = taken.every(Boolean);
@@ -160,25 +161,76 @@ export function GuidedCapture({
     }
   }, [count, capturePhase]);
 
+  // ---- Orientation Check --------------------------------------------------
+  useEffect(() => {
+    const checkOrientation = () => {
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+    checkOrientation();
+    window.addEventListener('resize', checkOrientation);
+    window.addEventListener('orientationchange', checkOrientation);
+    return () => {
+      window.removeEventListener('resize', checkOrientation);
+      window.removeEventListener('orientationchange', checkOrientation);
+    };
+  }, []);
+
+  // ---- Camera Device Selection (Widest / 0.5x) -----------------------------
+  const getWideCameraId = async (): Promise<string | null> => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(d => d.kind === 'videoinput');
+      const backCameras = videoDevices.filter(d => 
+        d.label.toLowerCase().includes('back') || 
+        d.label.toLowerCase().includes('environment') ||
+        d.label.toLowerCase().includes('rear')
+      );
+
+      if (backCameras.length > 0) {
+        // Look for camera matching 0.5x or ultra-wide keywords
+        const ultraWide = backCameras.find(d => 
+          d.label.toLowerCase().includes('ultra') || 
+          d.label.toLowerCase().includes('0.5') ||
+          d.label.toLowerCase().includes('wide')
+        );
+        if (ultraWide) return ultraWide.deviceId;
+        
+        // On many Android devices, the second back camera is the ultra-wide
+        if (backCameras.length > 1) {
+          return backCameras[1].deviceId;
+        }
+        return backCameras[0].deviceId;
+      }
+    } catch (e) {
+      console.warn('Failed to enumerate cameras:', e);
+    }
+    return null;
+  };
+
   // ---- Camera Initialization ----------------------------------------------
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         let stream: MediaStream;
+        const deviceId = await getWideCameraId();
+        
         try {
-          // Attempt wide-angle / focus lock
+          // Attempt wide-angle camera by ID or constraints
           stream = await navigator.mediaDevices.getUserMedia({
-            video: { 
-              facingMode: { ideal: 'environment' }, 
-              width: { ideal: 1920 },
-              // @ts-ignore - experimental constraints
-              focusMode: 'continuous',
-              zoom: { ideal: 0.5 } 
-            } as any,
+            video: deviceId 
+              ? { deviceId: { exact: deviceId }, width: { ideal: 1920 } }
+              : { 
+                  facingMode: { ideal: 'environment' }, 
+                  width: { ideal: 1920 },
+                  // @ts-ignore - experimental constraints
+                  focusMode: 'continuous',
+                  zoom: { ideal: 0.5 } 
+                } as any,
             audio: false,
           });
         } catch {
+          // Fallback
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
             audio: false,
@@ -310,7 +362,11 @@ export function GuidedCapture({
         (blob) => {
           if (blob) {
             capturedOrderRef.current = [...capturedOrderRef.current.slice(0, shotIndex), targetIndex];
-            onShot({ blob, face: target.face, yaw: orient?.yaw ?? 0, pitch: orient?.pitch ?? 0 });
+            // Calculate yaw relative to the capture origin (baseYaw)
+            const absYaw = orient?.yaw ?? 0;
+            const relYaw = baseYawRef.current != null ? angleDelta(baseYawRef.current, absYaw) : 0;
+
+            onShot({ blob, face: target.face, yaw: relYaw, pitch: orient?.pitch ?? 0 });
             triggerFlash();
             alignedSinceRef.current = null;
             setDwellProgress(0);
@@ -436,6 +492,21 @@ export function GuidedCapture({
   useEffect(() => {
     return () => imageUrls.forEach((url) => URL.revokeObjectURL(url));
   }, [imageUrls]);
+
+  // ========================================================================
+  //  PORTRAIT ENFORCEMENT
+  // ========================================================================
+  if (!isPortrait) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 p-6 text-center text-white">
+        <svg className="w-16 h-16 mb-4 animate-bounce text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+        <h2 className="text-xl font-bold">Please Rotate Device</h2>
+        <p className="text-slate-400 mt-2 text-sm">Capture is only supported in Portrait mode.</p>
+      </div>
+    );
+  }
 
   // ========================================================================
   //  ERROR STATE
