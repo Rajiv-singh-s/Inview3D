@@ -170,7 +170,7 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
 
     // Project the whole frame into cube space at the current device orientation.
     const pose = aimRef.current;
-    cube.project(cap, pose, CAMERA_HFOV_DEG);
+    cube.project(cap, pose, CAMERA_HFOV_DEG, sharp);
 
     // Update state
     const newCoverage = cube.totalCoverage();

@@ -82,8 +82,8 @@ export class CubeFaces {
 
   /** Persistent RGBA pixels per face (authoritative buffer, mirrored to the canvas). */
   private readonly pixels = new Map<CubeFace, ImageData>();
-  /** Accumulated blend weight per texel, parallel to {@link pixels}. */
-  private readonly weights = new Map<CubeFace, Float32Array>();
+  /** Stored quality score per texel, parallel to {@link pixels}. */
+  private readonly qualities = new Map<CubeFace, Float32Array>();
   /** Fraction of texels that have received any real projection. */
   private readonly coverage = new Map<CubeFace, number>();
 
@@ -108,27 +108,27 @@ export class CubeFaces {
     }
   }
 
-  private ensureBuffers(face: CubeFace): { data: ImageData; weight: Float32Array } {
+  private ensureBuffers(face: CubeFace): { data: ImageData; quality: Float32Array } {
     let data = this.pixels.get(face);
-    let weight = this.weights.get(face);
-    if (!data || !weight) {
+    let quality = this.qualities.get(face);
+    if (!data || !quality) {
       const ctx = this.canvases.get(face)!.getContext('2d')!;
       data = ctx.getImageData(0, 0, FACE_SIZE, FACE_SIZE);
-      weight = new Float32Array(FACE_SIZE * FACE_SIZE);
+      quality = new Float32Array(FACE_SIZE * FACE_SIZE);
       this.pixels.set(face, data);
-      this.weights.set(face, weight);
+      this.qualities.set(face, quality);
     }
-    return { data, weight };
+    return { data, quality };
   }
 
   /**
-   * Projects a captured frame into cube space and blends it onto every face it
-   * covers. Perspective-correct: for each destination texel we cast its world
-   * ray back into the camera and sample the source with bilinear filtering,
-   * so straight lines stay straight and no pixels are cropped except those that
-   * fall outside the frame or belong to a different face.
+   * Projects a captured frame into cube space. Perspective-correct: for each 
+   * destination texel we cast its world ray back into the camera and sample the 
+   * source. We use a strict replacement policy: if the incoming pixel has a higher 
+   * quality (sharpness * viewing angle confidence) than the stored pixel, it replaces 
+   * it entirely. No blending or averaging occurs, preserving maximum sharpness.
    */
-  project(frame: HTMLCanvasElement, pose: CameraPose, hFovDeg: number): void {
+  project(frame: HTMLCanvasElement, pose: CameraPose, hFovDeg: number, sharpness: number): void {
     const srcW = frame.width;
     const srcH = frame.height;
     const srcCtx = frame.getContext('2d')!;
@@ -158,7 +158,7 @@ export class CubeFaces {
     for (const face of CUBE_FACES) {
       const box = bounds.get(face);
       if (!box) continue;
-      const { data, weight } = this.ensureBuffers(face);
+      const { data, quality } = this.ensureBuffers(face);
       const px = data.data;
 
       let newlyCovered = 0;
@@ -172,26 +172,29 @@ export class CubeFaces {
           const ny = d.dot(up) / zc / tanV;
           if (nx < -1 || nx > 1 || ny < -1 || ny > 1) continue; // outside the frame
 
-          // Source pixel (image y grows downward; camera up is smaller y).
-          const sx = (nx * 0.5 + 0.5) * (srcW - 1);
-          const sy = (0.5 - ny * 0.5) * (srcH - 1);
-          const [r, g, bl] = bilinear(src, srcW, srcH, sx, sy);
+          // Confidence based on viewing angle (higher near the center, drops to 0 at edges).
+          const confidence = zc * (1 - Math.abs(nx)) * (1 - Math.abs(ny));
+          if (confidence <= 0) continue;
 
-          // Feather toward the frame edges + foreshorten, so overlaps blend and
-          // seams disappear. Edge pixels contribute, just with less weight.
-          const w = zc * (1 - Math.abs(nx)) * (1 - Math.abs(ny));
-          if (w <= 0) continue;
-
+          const texelQuality = sharpness * confidence;
           const wi = y * FACE_SIZE + x;
-          const w0 = weight[wi];
-          const inv = 1 / (w0 + w);
-          const pi = wi * 4;
-          px[pi] = (px[pi] * w0 + r * w) * inv;
-          px[pi + 1] = (px[pi + 1] * w0 + g * w) * inv;
-          px[pi + 2] = (px[pi + 2] * w0 + bl * w) * inv;
-          px[pi + 3] = 255;
-          if (w0 === 0) newlyCovered++;
-          weight[wi] = w0 + w;
+          const oldQuality = quality[wi];
+
+          if (texelQuality > oldQuality) {
+            // Source pixel (image y grows downward; camera up is smaller y).
+            const sx = (nx * 0.5 + 0.5) * (srcW - 1);
+            const sy = (0.5 - ny * 0.5) * (srcH - 1);
+            const [r, g, bl] = bilinear(src, srcW, srcH, sx, sy);
+
+            const pi = wi * 4;
+            px[pi] = r;
+            px[pi + 1] = g;
+            px[pi + 2] = bl;
+            px[pi + 3] = 255;
+            
+            if (oldQuality === 0) newlyCovered++;
+            quality[wi] = texelQuality;
+          }
         }
       }
 
@@ -316,7 +319,7 @@ export class CubeFaces {
     this.textures.clear();
     this.canvases.clear();
     this.pixels.clear();
-    this.weights.clear();
+    this.qualities.clear();
   }
 }
 
