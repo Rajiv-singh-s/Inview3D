@@ -53,8 +53,7 @@ export default function ViewerPage({ params }: { params: Promise<{ id: string }>
         <div>
           <h1 className="text-2xl font-bold">{data.originalName}</h1>
           <p className="text-sm text-slate-400">
-            Photosphere · {data.photoCount ?? '?'} photos
-            {data.panoramaSizeBytes ? ` · ${formatBytes(data.panoramaSizeBytes)}` : ''}
+            Cubemap · {data.photoCount ?? '?'} photos
           </p>
         </div>
         <div className="flex gap-3">

@@ -60,7 +60,6 @@ export default function ProjectsPage() {
             <div className="flex items-center justify-between text-sm text-slate-400">
               <span>
                 {new Date(project.createdAt).toLocaleString()}
-                {project.panoramaSizeBytes ? ` · ${formatBytes(project.panoramaSizeBytes)}` : ''}
               </span>
               <div className="flex gap-3">
                 {project.status === 'completed' ? (
