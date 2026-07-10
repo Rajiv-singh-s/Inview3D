@@ -81,10 +81,13 @@ interface GuidedCaptureProps {
 
 /**
  * Guided spherical photo capture matching the reference app:
- * - All 16 target dots are solid green circles, always visible on screen
- * - Captured dots remain as brighter green
- * - Centre reticle is a white ring with green pie-fill dwell animation
- * - Auto-captures when reticle aligns with the next target
+ * - Targets are white dots, anchored to fixed directions in the world. They
+ *   scroll off screen as you look away rather than sliding along the edge,
+ *   because a target you can chase is not a target.
+ * - A dot turns green once its photo has been taken.
+ * - A hint names the axis to move along (left/right/up/down).
+ * - Centre reticle is a white ring with a green pie-fill dwell animation; the
+ *   shot fires once alignment has been held briefly.
  */
 export function GuidedCapture({
   shots,
@@ -303,23 +306,14 @@ export function GuidedCapture({
       const localX = tx3 * rx + ty3 * 0 + tz3 * rz;
       const localY = tx3 * ux + ty3 * uy + tz3 * uz;
 
-      let screenX: number;
-      let screenY: number;
+      // Targets are anchored in the world: a dot sits where its direction
+      // projects, and simply leaves the screen when you look away. Clamping it
+      // to the edge would make it slide around and stop being a fixed target.
+      if (localZ <= 0.01) return; // behind the camera
 
-      if (localZ > 0.01) {
-        // Target is in front of camera — perspective project
-        screenX = 50 + ((localX / localZ) / hScale) * 50;
-        screenY = 50 - ((localY / localZ) / vScale) * 50;
-      } else {
-        // Target is behind the camera — project to screen edge
-        const len = Math.hypot(localX, localY) || 1;
-        screenX = 50 + (localX / len) * 48;
-        screenY = 50 - (localY / len) * 48;
-      }
-
-      // Clamp to screen edges so dots NEVER vanish
-      screenX = Math.max(5, Math.min(95, screenX));
-      screenY = Math.max(5, Math.min(95, screenY));
+      const screenX = 50 + (localX / localZ / hScale) * 50;
+      const screenY = 50 - (localY / localZ / vScale) * 50;
+      if (screenX < 2 || screenX > 98 || screenY < 2 || screenY > 98) return;
 
       visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
     });
@@ -453,6 +447,17 @@ export function GuidedCapture({
   // ========================================================================
   const aligned = current != null && current.dist <= TOLERANCE_DEG;
 
+  /**
+   * Which way to move to reach the next target. Uses whichever axis is further
+   * off, so the instruction is always the one that closes the gap fastest.
+   */
+  const directionHint = ((): string | null => {
+    if (current == null || aligned) return null;
+    const { dYaw, dPitch } = current;
+    if (Math.abs(dYaw) >= Math.abs(dPitch)) return dYaw > 0 ? 'Turn right →' : '← Turn left';
+    return dPitch > 0 ? 'Tilt up ↑' : 'Tilt down ↓';
+  })();
+
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
       {/* Live camera feed — full height */}
@@ -469,11 +474,10 @@ export function GuidedCapture({
         {/* Guide frame */}
         <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/20" />
 
-        {/* ALL 16 target dots — always visible as solid green circles */}
+        {/* Target dots: white until shot, green once captured. */}
         {dots.map((d) => {
           const isNext = d.index === nextTargetIndex;
           const isAligned = isNext && d.dist <= TOLERANCE_DEG;
-          // Size: current target is larger, especially when aligned
           const size = isNext ? (isAligned ? 38 : 26) : 20;
 
           return (
@@ -485,21 +489,18 @@ export function GuidedCapture({
                 top: `${d.y}%`,
                 width: size,
                 height: size,
-                // All dots are solid green — matching the reference video exactly
                 backgroundColor: d.isTaken
-                  ? 'rgba(34,197,94,0.95)'   // Bright green for captured
+                  ? 'rgba(34,197,94,0.95)' // captured
                   : isNext
-                    ? (isAligned ? 'rgba(34,197,94,0.8)' : 'rgba(34,197,94,0.75)')
-                    : 'rgba(34,197,94,0.6)',  // Slightly dimmer green for uncaptured
-                border: isNext
-                  ? (isAligned
-                    ? '3px solid rgba(255,255,255,0.95)'
-                    : '2px solid rgba(255,255,255,0.6)')
-                  : d.isTaken
-                    ? '2px solid rgba(34,197,94,1)'
+                    ? 'rgba(255,255,255,0.95)' // next target, brighter
+                    : 'rgba(255,255,255,0.6)', // pending
+                border: d.isTaken
+                  ? '2px solid rgba(34,197,94,1)'
+                  : isAligned
+                    ? '3px solid rgba(34,197,94,0.95)'
                     : 'none',
                 boxShadow: isAligned
-                  ? '0 0 12px rgba(34,197,94,0.6), 0 0 0 4px rgba(255,255,255,0.2)'
+                  ? '0 0 12px rgba(255,255,255,0.7), 0 0 0 4px rgba(34,197,94,0.35)'
                   : 'none',
                 transition: 'all 0.15s ease-out',
               }}
@@ -537,6 +538,13 @@ export function GuidedCapture({
             {!hasCompass && <span className="absolute text-[10px] font-semibold text-white">TAP</span>}
           </div>
         </div>
+
+        {/* Which way to move to reach the next target. */}
+        {hasCompass && directionHint && (
+          <div className="absolute left-1/2 top-[63%] -translate-x-1/2 rounded-full bg-black/55 px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm">
+            {directionHint}
+          </div>
+        )}
       </div>
 
       {/* Top controls — back and cancel */}
