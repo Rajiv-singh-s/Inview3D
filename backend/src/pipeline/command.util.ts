@@ -20,7 +20,7 @@ export class CommandError extends Error {
 }
 
 /**
- * Spawns an external process (FFmpeg / COLMAP / OpenMVS / scripts), streams
+ * Spawns an external process (the Python stitcher), streams
  * its output to the project log, and resolves on exit code 0. Rejects with a
  * {@link CommandError} otherwise — including on timeout — so the pipeline can
  * mark the failing step and surface a meaningful message.

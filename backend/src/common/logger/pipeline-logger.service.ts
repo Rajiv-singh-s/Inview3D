@@ -49,7 +49,7 @@ export class ProjectLogger {
     this.write('error', message, meta);
   }
 
-  /** Convenience for command output captured from FFmpeg/COLMAP/OpenMVS. */
+  /** Convenience for raw output captured from the stitching subprocess. */
   raw(source: string, chunk: string): void {
     // Keep raw tool output on its own lines for readability.
     fs.appendFileSync(this.logFile, `--- ${source} ---\n${chunk}\n`, { encoding: 'utf8' });

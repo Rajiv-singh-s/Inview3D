@@ -11,7 +11,7 @@ import { Request, Response } from 'express';
 /**
  * Converts any thrown error into a consistent JSON error envelope so the
  * frontend can render meaningful messages regardless of failure origin
- * (validation, FFmpeg, COLMAP, disk full, unexpected crash, …).
+ * (validation, stitching, disk full, unexpected crash, …).
  */
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
