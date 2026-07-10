@@ -525,9 +525,11 @@ export function GuidedCapture({
   const aligned = current != null && current.dist <= TOLERANCE_DEG;
 
   const directionHint = ((): string | null => {
-    if (current == null || aligned) return null;
+    if (current == null || aligned || !orient) return null;
     const { dYaw, dPitch } = current;
-    if (Math.abs(dYaw) >= Math.abs(dPitch)) return dYaw > 0 ? 'Turn right →' : '← Turn left';
+    // Scale yaw delta by the cosine of the pitch to prevent unstable/large yaw guidance at the poles
+    const scaledDYaw = dYaw * Math.cos((orient.pitch * Math.PI) / 180);
+    if (Math.abs(scaledDYaw) >= Math.abs(dPitch)) return dYaw > 0 ? 'Turn right →' : '← Turn left';
     return dPitch > 0 ? 'Tilt up ↑' : 'Tilt down ↓';
   })();
 
