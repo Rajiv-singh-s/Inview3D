@@ -36,12 +36,12 @@ function buildTargets(): Target[] {
 export const TOTAL_SHOTS = buildTargets().length;
 
 /** How close (degrees) the reticle must be to a target to auto-capture it. */
-const TOLERANCE_DEG = 6;
+const TOLERANCE_DEG = 8;
 /** Must remain aligned for this long before auto-capture fires. */
-const CAPTURE_DWELL_MS = 220;
+const CAPTURE_DWELL_MS = 300;
 /** Half-angles of the on-screen guidance viewport. */
-const H_FOV = 52;
-const V_FOV = 40;
+const H_FOV = 55;
+const V_FOV = 45;
 
 export interface CapturedShot {
   blob: Blob;
@@ -80,9 +80,11 @@ interface GuidedCaptureProps {
 }
 
 /**
- * Guided spherical photo capture. The user stands still and sweeps the phone
- * across the sphere; each target is shot automatically when the reticle reaches
- * it.
+ * Guided spherical photo capture matching the reference app:
+ * - All 16 target dots are solid green circles, always visible on screen
+ * - Captured dots remain as brighter green
+ * - Centre reticle is a white ring with green pie-fill dwell animation
+ * - Auto-captures when reticle aligns with the next target
  */
 export function GuidedCapture({
   shots,
@@ -145,12 +147,12 @@ export function GuidedCapture({
       try {
         let stream: MediaStream;
         try {
-          // Attempt to request an ultra-wide / 0.5x zoom if supported by mobile browsers
+          // Attempt to request an ultra-wide / 0.5x zoom if supported
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, zoom: { ideal: 0.5 } } as any,
             audio: false,
           });
-        } catch (e) {
+        } catch {
           // Fallback if overconstrained
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
@@ -245,7 +247,10 @@ export function GuidedCapture({
     return nextStep >= 0 ? captureOrder[nextStep] : null;
   }, [captureOrder, taken]);
 
-  /** Screen-projected positions for the current target and a few upcoming hints. */
+  /**
+   * Project ALL 16 targets onto the screen using true 3D perspective projection.
+   * Dots that are off-screen or behind the camera are clamped to screen edges.
+   */
   const { dots, current } = useMemo((): {
     dots: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }>;
     current: { index: number; dist: number; dYaw: number; dPitch: number } | null;
@@ -253,30 +258,28 @@ export function GuidedCapture({
     if (!orient || baseYawRef.current == null) return { dots: [], current: null };
     const base = baseYawRef.current;
 
-    if (nextTargetIndex == null) return { dots: [], current: null };
+    if (nextTargetIndex == null && !done) return { dots: [], current: null };
 
     const visible: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }> = [];
-
     let currentTarget: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
-    
+
     // Camera orientation in radians
     const cy = (orient.yaw * Math.PI) / 180;
     const cp = (orient.pitch * Math.PI) / 180;
-    
+
     // Camera Forward vector (Z)
     const fz_x = Math.cos(cp) * Math.sin(cy);
     const fz_y = Math.sin(cp);
     const fz_z = Math.cos(cp) * Math.cos(cy);
-    
+
     // Camera Right vector (X)
     const rx = Math.cos(cy);
-    const ry = 0;
     const rz = -Math.sin(cy);
-    
+
     // Camera Up vector (Y)
-    const ux = fz_y * rz - fz_z * ry;
+    const ux = fz_y * rz - fz_z * 0;
     const uy = fz_z * rx - fz_x * rz;
-    const uz = fz_x * ry - fz_y * rx;
+    const uz = fz_x * 0 - fz_y * rx;
 
     const hScale = Math.tan((H_FOV / 2) * Math.PI / 180);
     const vScale = Math.tan((V_FOV / 2) * Math.PI / 180);
@@ -286,44 +289,43 @@ export function GuidedCapture({
       const dYaw = angleDelta(orient.yaw, tYawTrue);
       const dPitch = t.pitch - orient.pitch;
       const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
-      
+
       if (index === nextTargetIndex) currentTarget = { index, dist, dYaw, dPitch };
 
       const ty = (tYawTrue * Math.PI) / 180;
       const tp = (t.pitch * Math.PI) / 180;
-      
-      const tx = Math.cos(tp) * Math.sin(ty);
-      const ty_vec = Math.sin(tp);
-      const tz = Math.cos(tp) * Math.cos(ty);
-      
-      const localZ = tx * fz_x + ty_vec * fz_y + tz * fz_z;
-      const localX = tx * rx + ty_vec * ry + tz * rz;
-      const localY = tx * ux + ty_vec * uy + tz * uz;
-      
-      if (localZ > 0) {
-        let screenX = 50 + ((localX / localZ) / hScale) * 50;
-        let screenY = 50 - ((localY / localZ) / vScale) * 50;
-        
-        // Clamp to screen edges so they don't vanish
-        screenX = Math.max(4, Math.min(96, screenX));
-        screenY = Math.max(4, Math.min(96, screenY));
-        
-        visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
+
+      const tx3 = Math.cos(tp) * Math.sin(ty);
+      const ty3 = Math.sin(tp);
+      const tz3 = Math.cos(tp) * Math.cos(ty);
+
+      const localZ = tx3 * fz_x + ty3 * fz_y + tz3 * fz_z;
+      const localX = tx3 * rx + ty3 * 0 + tz3 * rz;
+      const localY = tx3 * ux + ty3 * uy + tz3 * uz;
+
+      let screenX: number;
+      let screenY: number;
+
+      if (localZ > 0.01) {
+        // Target is in front of camera — perspective project
+        screenX = 50 + ((localX / localZ) / hScale) * 50;
+        screenY = 50 - ((localY / localZ) / vScale) * 50;
       } else {
-        // Target is behind the camera. Clamp to the edge of the screen.
+        // Target is behind the camera — project to screen edge
         const len = Math.hypot(localX, localY) || 1;
-        const dirX = localX / len;
-        const dirY = localY / len;
-        // Project to the edge
-        const screenX = 50 + dirX * 46;
-        const screenY = 50 - dirY * 46;
-        
-        visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
+        screenX = 50 + (localX / len) * 48;
+        screenY = 50 - (localY / len) * 48;
       }
+
+      // Clamp to screen edges so dots NEVER vanish
+      screenX = Math.max(5, Math.min(95, screenX));
+      screenY = Math.max(5, Math.min(95, screenY));
+
+      visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
     });
 
     return { dots: visible, current: currentTarget };
-  }, [orient, targets, taken, captureOrder, nextTargetIndex]);
+  }, [orient, targets, taken, captureOrder, nextTargetIndex, done]);
 
   // Auto-capture: fire only on the current ordered target after brief stable alignment.
   useEffect(() => {
@@ -366,6 +368,9 @@ export function GuidedCapture({
     };
   }, [imageUrls]);
 
+  // ========================================================================
+  //  REVIEW PHASE
+  // ========================================================================
   if (capturePhase === 'review') {
     return (
       <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-slate-950 p-4 border border-slate-800 text-white min-h-[75vh] flex flex-col justify-between">
@@ -404,7 +409,6 @@ export function GuidedCapture({
                 />
               </button>
             </div>
-
           </div>
         </div>
 
@@ -429,6 +433,9 @@ export function GuidedCapture({
     );
   }
 
+  // ========================================================================
+  //  ERROR STATE
+  // ========================================================================
   if (error) {
     return (
       <div className="card border-red-500/40 bg-red-500/5 p-6">
@@ -441,23 +448,15 @@ export function GuidedCapture({
     );
   }
 
+  // ========================================================================
+  //  CAPTURE PHASE
+  // ========================================================================
   const aligned = current != null && current.dist <= TOLERANCE_DEG;
-
-  const hint =
-    current == null
-      ? null
-      : Math.abs(current.dYaw) > Math.abs(current.dPitch)
-        ? current.dYaw > 0
-          ? 'Turn right >'
-          : '< Turn left'
-        : current.dPitch > 0
-          ? 'Tilt up ^'
-          : 'Tilt down v';
 
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
-      {/* Live camera feed */}
-      <video ref={videoRef} playsInline muted className="h-[65vh] w-full bg-black object-cover" />
+      {/* Live camera feed — full height */}
+      <video ref={videoRef} playsInline muted className="h-[85vh] w-full bg-black object-cover" />
 
       {/* White-flash overlay on capture */}
       <div
@@ -468,64 +467,64 @@ export function GuidedCapture({
       {/* AR overlay */}
       <div className="pointer-events-none absolute inset-0">
         {/* Guide frame */}
-        <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/25" />
+        <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/20" />
 
-        {/* All target dots in view */}
-        {dots.map((d) => (
-          <div
-            key={d.index}
-            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
-            style={{
-              left: `${d.x}%`,
-              top: `${d.y}%`,
-              width: d.index === nextTargetIndex ? (d.dist <= TOLERANCE_DEG ? 40 : 28) : 18,
-              height: d.index === nextTargetIndex ? (d.dist <= TOLERANCE_DEG ? 40 : 28) : 18,
-              backgroundColor: d.isTaken
-                ? 'rgba(34,197,94,0.7)' // Solid green for captured
-                : d.index === nextTargetIndex
-                  ? (d.dist <= TOLERANCE_DEG
-                    ? 'rgba(34,197,94,0.3)'
-                    : 'transparent')
-                  : 'rgba(255,255,255,0.4)', // Solid white for uncaptured
-              border: d.isTaken
-                ? '2px solid rgba(34,197,94,0.9)'
-                : d.index === nextTargetIndex
-                  ? (d.dist <= TOLERANCE_DEG
+        {/* ALL 16 target dots — always visible as solid green circles */}
+        {dots.map((d) => {
+          const isNext = d.index === nextTargetIndex;
+          const isAligned = isNext && d.dist <= TOLERANCE_DEG;
+          // Size: current target is larger, especially when aligned
+          const size = isNext ? (isAligned ? 38 : 26) : 20;
+
+          return (
+            <div
+              key={d.index}
+              className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
+              style={{
+                left: `${d.x}%`,
+                top: `${d.y}%`,
+                width: size,
+                height: size,
+                // All dots are solid green — matching the reference video exactly
+                backgroundColor: d.isTaken
+                  ? 'rgba(34,197,94,0.95)'   // Bright green for captured
+                  : isNext
+                    ? (isAligned ? 'rgba(34,197,94,0.8)' : 'rgba(34,197,94,0.75)')
+                    : 'rgba(34,197,94,0.6)',  // Slightly dimmer green for uncaptured
+                border: isNext
+                  ? (isAligned
                     ? '3px solid rgba(255,255,255,0.95)'
-                    : '2px solid rgba(255,255,255,0.65)')
-                  : '1px solid rgba(255,255,255,0.7)',
-              boxShadow:
-                d.index === nextTargetIndex && d.dist <= TOLERANCE_DEG && !d.isTaken
-                  ? '0 0 0 6px rgba(255,255,255,0.25)'
+                    : '2px solid rgba(255,255,255,0.6)')
+                  : d.isTaken
+                    ? '2px solid rgba(34,197,94,1)'
+                    : 'none',
+                boxShadow: isAligned
+                  ? '0 0 12px rgba(34,197,94,0.6), 0 0 0 4px rgba(255,255,255,0.2)'
                   : 'none',
-              transition: 'all 0.12s',
-            }}
-          />
-        ))}
+                transition: 'all 0.15s ease-out',
+              }}
+            />
+          );
+        })}
 
-        {/* Directional hint */}
-        {hasCompass && hint && !aligned && (
-          <div className="absolute left-1/2 top-[62%] -translate-x-1/2 rounded-full bg-black/60 px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm">
-            {hint}
-          </div>
-        )}
-
-        {/* Centre reticle */}
+        {/* Centre reticle — white ring with green pie-fill dwell */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           <div
-            className={`relative grid h-16 w-16 place-items-center rounded-full border-4 transition-all duration-150 ${
+            className={`relative grid h-16 w-16 place-items-center rounded-full border-[3px] transition-all duration-150 ${
               aligned
                 ? 'scale-110 border-white bg-green-500/20'
-                : 'border-white/70 bg-transparent'
+                : 'border-white/60 bg-transparent'
             }`}
           >
+            {/* Dwell progress ring */}
             {aligned && (
-              <svg className="absolute inset-0 -rotate-90 h-full w-full p-1" viewBox="0 0 36 36">
+              <svg className="absolute inset-0 -rotate-90 h-full w-full p-0.5" viewBox="0 0 36 36">
                 <path
-                  className="text-green-500"
+                  className="text-green-400"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="3"
+                  strokeWidth="3.5"
+                  strokeLinecap="round"
                   strokeDasharray={`${dwellProgress * 100}, 100`}
                   d="M18 2.0845
                     a 15.9155 15.9155 0 0 1 0 31.831
@@ -533,39 +532,47 @@ export function GuidedCapture({
                 />
               </svg>
             )}
-            {!hasCompass && <span className="text-[10px] font-semibold text-white">TAP</span>}
+            {/* Inner green dot */}
+            <div className={`h-3 w-3 rounded-full transition-colors ${aligned ? 'bg-green-400' : 'bg-white/50'}`} />
+            {!hasCompass && <span className="absolute text-[10px] font-semibold text-white">TAP</span>}
           </div>
         </div>
       </div>
 
-      {/* Top controls */}
+      {/* Top controls — back and cancel */}
       <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
         <button
           onClick={onUndo}
           disabled={count === 0 || busy}
-          className="grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-900 disabled:opacity-40"
+          className="grid h-9 w-9 place-items-center rounded-full bg-white/15 backdrop-blur-sm text-white disabled:opacity-30"
           aria-label="Undo last shot"
         >
-          U
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
         </button>
         <button
           onClick={onCancel}
-          className="grid h-9 w-9 place-items-center rounded-full bg-red-500 text-white"
+          className="grid h-9 w-9 place-items-center rounded-full bg-red-500/80 backdrop-blur-sm text-white"
           aria-label="Cancel capture"
         >
-          X
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
         </button>
       </div>
 
       {/* Bottom panel */}
-      <div className="absolute inset-x-0 bottom-0 space-y-2 bg-gradient-to-t from-black/90 to-transparent p-4 pt-6">
+      <div className="absolute inset-x-0 bottom-0 space-y-2 bg-gradient-to-t from-black/90 to-transparent p-4 pt-8">
         <p className="text-center text-xs text-white/80 font-medium px-4">
           Shoot all photos from the same spot as your initial photo to ensure an optimal result.
         </p>
 
         {/* Progress bar */}
         <div className="flex items-center gap-3">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/25">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
             <div
               className="h-full rounded-full bg-green-500 transition-[width] duration-300"
               style={{ width: `${(count / TOTAL_SHOTS) * 100}%` }}

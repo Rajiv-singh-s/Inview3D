@@ -105,11 +105,6 @@ export function PhotosphereViewer({ url }: { url: string }) {
     setFov(fovRef.current + delta);
   }, [setFov]);
 
-  const reset = useCallback(() => {
-    look.current = { lon: 0, lat: 0 };
-    setFov(DEFAULT_FOV);
-  }, [setFov]);
-
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === 'touch' && lastTouchCount.current > 1) return;
     dragging.current = true;
@@ -231,19 +226,10 @@ export function PhotosphereViewer({ url }: { url: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [zoomBy]);
 
-  const Btn = ({ onClick, label }: { onClick: () => void; label: string }) => (
-    <button
-      onClick={onClick}
-      className="rounded-lg bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-white backdrop-blur hover:bg-slate-800"
-    >
-      {label}
-    </button>
-  );
-
   return (
     <div
       id="photosphere-shell"
-      className="relative h-[75vh] w-full select-none overflow-hidden rounded-2xl border border-slate-800 bg-black"
+      className="relative h-[85vh] w-full select-none overflow-hidden rounded-2xl bg-black"
       style={{ cursor: 'grab', touchAction: 'none' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -265,22 +251,29 @@ export function PhotosphereViewer({ url }: { url: string }) {
         <CameraRig look={look} fov={fovRef} joystick={joystickRef} />
       </Canvas>
 
-      <div className="pointer-events-auto absolute right-3 top-3 flex flex-wrap justify-end gap-2">
-        <Btn onClick={() => zoomBy(-10)} label="Zoom +" />
-        <Btn onClick={() => zoomBy(10)} label="Zoom −" />
-        <Btn onClick={reset} label="Reset" />
-        <Btn onClick={toggleFullscreen} label="⛶" />
-      </div>
+      {/* Fullscreen button — top-right, minimal */}
+      <button
+        onClick={toggleFullscreen}
+        className="absolute right-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-black/40 backdrop-blur-sm text-white/80 hover:bg-black/60 transition-colors"
+        aria-label="Toggle fullscreen"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="15 3 21 3 21 9" />
+          <polyline points="9 21 3 21 3 15" />
+          <line x1="21" y1="3" x2="14" y2="10" />
+          <line x1="3" y1="21" x2="10" y2="14" />
+        </svg>
+      </button>
 
-      {/* Joystick / Gyroscope touchpad controller */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+      {/* Joystick — translucent, matching the reference video */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
         <div
           id="joystick-base"
-          className="h-20 w-20 rounded-full bg-slate-950/60 border border-slate-800/80 backdrop-blur flex items-center justify-center pointer-events-auto"
+          className="h-[72px] w-[72px] rounded-full bg-white/10 border border-white/20 backdrop-blur-sm flex items-center justify-center pointer-events-auto"
         >
           <div
             id="joystick-handle"
-            className="h-10 w-10 rounded-full bg-white shadow-xl cursor-pointer flex items-center justify-center transition-shadow duration-150 active:shadow-inner"
+            className="h-9 w-9 rounded-full bg-white/70 shadow-lg cursor-pointer flex items-center justify-center"
             style={{
               transform: `translate(${joystickPos.x}px, ${joystickPos.y}px)`,
               touchAction: 'none',
@@ -290,14 +283,9 @@ export function PhotosphereViewer({ url }: { url: string }) {
             onPointerUp={onJoystickUp}
             onPointerCancel={onJoystickUp}
           >
-            {/* Visual look indicator */}
-            <div className="h-2 w-2 rounded-full bg-slate-400" />
+            <div className="h-2 w-2 rounded-full bg-slate-500/60" />
           </div>
         </div>
-      </div>
-
-      <div className="pointer-events-none absolute bottom-2 left-0 right-0 text-center text-[10px] text-white/40">
-        Drag to look · Use stick to pan · Pinch to zoom
       </div>
     </div>
   );
