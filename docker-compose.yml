@@ -12,8 +12,10 @@ services:
     image: redis:7-alpine
     container_name: inview3d-redis
     restart: unless-stopped
-    ports:
-      - '6379:6379'
+    # No host port published — the backend reaches Redis over the compose
+    # network as `redis:6379`. Avoids clashing with other local Redis instances.
+    expose:
+      - '6379'
     volumes:
       - redis-data:/data
     healthcheck:
@@ -37,7 +39,8 @@ services:
       - REDIS_PORT=6379
       - UPLOAD_PATH=/data/uploads
       - OUTPUT_PATH=/data/output
-      - CORS_ORIGIN=http://localhost:3000
+      # Allow both the deployed Vercel frontend and local dev.
+      - CORS_ORIGIN=${CORS_ORIGIN:-https://inview3-d-frontend.vercel.app,http://localhost:3001,http://localhost:3000}
     ports:
       - '4000:4000'
     volumes:

@@ -11,7 +11,15 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const appConfig = config.getOrThrow<AppConfig>('app');
 
-  app.enableCors({ origin: appConfig.corsOrigin, credentials: true });
+  // CORS_ORIGIN may be a single origin or a comma-separated list.
+  const allowedOrigins = appConfig.corsOrigin
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  app.enableCors({
+    origin: allowedOrigins.length === 1 ? allowedOrigins[0] : allowedOrigins,
+    credentials: true,
+  });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalFilters(new AllExceptionsFilter());
   app.enableShutdownHooks();

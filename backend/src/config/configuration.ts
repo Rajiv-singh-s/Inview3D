@@ -35,6 +35,12 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Frame interval may be fractional (e.g. 0.5s => 2 fps), so parse as float. */
+function toFloat(value: string | undefined, fallback: number): number {
+  const n = Number.parseFloat(value ?? '');
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 function resolvePath(value: string | undefined, fallback: string): string {
   const raw = value && value.trim().length > 0 ? value : fallback;
   return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
@@ -53,7 +59,7 @@ export default (): { app: AppConfig } => {
       outputPath: resolvePath(process.env.OUTPUT_PATH, path.join(repoRoot, 'output')),
       maxUploadSize: toInt(process.env.MAX_UPLOAD_SIZE, 2 * 1024 * 1024 * 1024),
       maxDurationSeconds: toInt(process.env.MAX_DURATION_SECONDS, 300),
-      frameIntervalSeconds: toInt(process.env.FRAME_INTERVAL_SECONDS, 1),
+      frameIntervalSeconds: toFloat(process.env.FRAME_INTERVAL_SECONDS, 0.5),
       maxFrames: toInt(process.env.MAX_FRAMES, 300),
       processingThreads: toInt(process.env.PROCESSING_THREADS, 0),
       pipelineScriptsDir: resolvePath(process.env.PIPELINE_SCRIPTS_DIR, defaultScripts),

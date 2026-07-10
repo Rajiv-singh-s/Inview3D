@@ -5,9 +5,34 @@ import type {
   ViewerMetadata,
 } from '@/types';
 
-/** Base URL of the NestJS backend (configurable per environment). */
-export const API_BASE_URL =
+const API_OVERRIDE_KEY = 'inview3d.apiBaseUrl';
+
+/** Build-time default; may be overridden at runtime (see {@link getApiBaseUrl}). */
+const BUILD_TIME_API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+
+/**
+ * Resolves the backend base URL at runtime.
+ *
+ * Dev/tunnel URLs change often (e.g. Cloudflare quick tunnels mint a new
+ * hostname on every restart), and `NEXT_PUBLIC_*` is inlined at build time —
+ * so changing it would otherwise require a full redeploy. Visiting the app
+ * once with `?api=https://new-host` stores the override in localStorage.
+ *
+ * Precedence: `?api=` query param > stored override > build-time default.
+ */
+export function getApiBaseUrl(): string {
+  if (typeof window === 'undefined') return BUILD_TIME_API_BASE_URL;
+
+  const fromQuery = new URLSearchParams(window.location.search).get('api');
+  if (fromQuery) {
+    const cleaned = fromQuery.replace(/\/+$/, '');
+    window.localStorage.setItem(API_OVERRIDE_KEY, cleaned);
+    return cleaned;
+  }
+
+  return window.localStorage.getItem(API_OVERRIDE_KEY) ?? BUILD_TIME_API_BASE_URL;
+}
 
 /** Error thrown for non-2xx API responses, carrying the server message. */
 export class ApiError extends Error {
@@ -21,7 +46,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, init);
+  const res = await fetch(`${getApiBaseUrl()}${path}`, init);
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -51,7 +76,7 @@ export const api = {
       const form = new FormData();
       form.append('video', file);
 
-      xhr.open('POST', `${API_BASE_URL}/upload`);
+      xhr.open('POST', `${getApiBaseUrl()}/upload`);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) {
           onProgress(Math.round((e.loaded / e.total) * 100));
@@ -89,5 +114,5 @@ export const api = {
     request<{ id: string; deleted: boolean }>(`/project/${id}`, { method: 'DELETE' }),
 
   /** Absolute URL of the generated GLB for a completed project. */
-  modelUrl: (id: string) => `${API_BASE_URL}/model/${id}`,
+  modelUrl: (id: string) => `${getApiBaseUrl()}/model/${id}`,
 };

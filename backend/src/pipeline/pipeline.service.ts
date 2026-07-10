@@ -196,16 +196,19 @@ export class PipelineService {
 
   private extractFrames(video: string, framesDir: string, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(framesDir, { recursive: true });
-    const fps = 1 / Math.max(1, this.app.frameIntervalSeconds);
+    // Fractional intervals are supported: 0.5s => 2 fps. Dense sampling gives
+    // COLMAP the frame-to-frame overlap it needs to bootstrap a sparse model.
+    const interval = this.app.frameIntervalSeconds > 0 ? this.app.frameIntervalSeconds : 0.5;
+    const fps = 1 / interval;
+    const outputOptions = ['-qscale:v 2'];
+    if (this.app.maxFrames > 0) {
+      // Hard cap the number of frames actually written.
+      outputOptions.push('-frames:v', String(this.app.maxFrames));
+    }
     return new Promise((resolve, reject) => {
-      log.info(`Extracting frames at ${fps} fps (interval ${this.app.frameIntervalSeconds}s)`);
-      const filters = [`fps=${fps}`];
-      if (this.app.maxFrames > 0) {
-        // Hard cap the number of frames extracted.
-        filters.push(`select='lte(n\\,${this.app.maxFrames * this.app.frameIntervalSeconds})'`);
-      }
+      log.info(`Extracting frames at ${fps} fps (interval ${interval}s)`);
       ffmpeg(video)
-        .outputOptions(['-qscale:v 2'])
+        .outputOptions(outputOptions)
         .videoFilters(`fps=${fps}`)
         .output(path.join(framesDir, 'frame_%05d.jpg'))
         .on('stderr', (line) => log.raw('ffmpeg:frames', line))
@@ -247,7 +250,12 @@ export class PipelineService {
         ws.frames,
         '--ImageReader.single_camera',
         '1',
-        '--SiftExtraction.num_threads',
+        // Force CPU SIFT: GPU (OpenGL) extraction fails when COLMAP runs as a
+        // spawned background process without a window/display context.
+        // NOTE: COLMAP 4.x renamed these from SiftExtraction.* to FeatureExtraction.*
+        '--FeatureExtraction.use_gpu',
+        '0',
+        '--FeatureExtraction.num_threads',
         String(this.threads),
       ],
       log,
@@ -261,7 +269,11 @@ export class PipelineService {
         'exhaustive_matcher',
         '--database_path',
         path.join(ws.colmap, this.databasePath),
-        '--SiftMatching.num_threads',
+        // CPU matching for the same headless-process reason as extraction.
+        // NOTE: COLMAP 4.x renamed these from SiftMatching.* to FeatureMatching.*
+        '--FeatureMatching.use_gpu',
+        '0',
+        '--FeatureMatching.num_threads',
         String(this.threads),
       ],
       log,
@@ -271,19 +283,34 @@ export class PipelineService {
   private async colmapMapper(ws: Workspace, log: ProjectLogger): Promise<void> {
     const sparse = path.join(ws.colmap, 'sparse');
     fs.mkdirSync(sparse, { recursive: true });
-    await runCommand(
-      this.colmap,
-      [
-        'mapper',
-        '--database_path',
-        path.join(ws.colmap, this.databasePath),
-        '--image_path',
-        ws.frames,
-        '--output_path',
-        sparse,
-      ],
-      log,
-    );
+    const frameCount = fs.readdirSync(ws.frames).filter((f) => f.endsWith('.jpg')).length;
+    try {
+      await runCommand(
+        this.colmap,
+        [
+          'mapper',
+          '--database_path',
+          path.join(ws.colmap, this.databasePath),
+          '--image_path',
+          ws.frames,
+          '--output_path',
+          sparse,
+        ],
+        log,
+      );
+    } catch (err) {
+      const tail = err instanceof CommandError ? err.stderrTail : '';
+      if (/no good initial image pair|Failed to create any sparse model/i.test(tail)) {
+        throw new Error(
+          `Structure-from-motion could not find two overlapping views to start from ` +
+            `(${frameCount} frames). The walkthrough needs more overlap between consecutive ` +
+            `frames. Try: record a slower, steadier walk; keep moving forward rather than ` +
+            `panning/rotating in place; avoid motion blur and blank walls; and use a longer ` +
+            `video so more frames are sampled.`,
+        );
+      }
+      throw err;
+    }
     if (!fs.existsSync(path.join(sparse, '0'))) {
       throw new Error(
         'Sparse reconstruction produced no model — the frames may not overlap enough. ' +

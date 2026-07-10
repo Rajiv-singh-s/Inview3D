@@ -19,17 +19,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip \
     # OpenMVS build deps
     libcgal-dev libboost-all-dev libopencv-dev libglu1-mesa-dev \
-    libglew-dev libeigen3-dev \
+    libglew-dev libeigen3-dev libnanoflann-dev libtinyxml2-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu 22.04 ships CMake 3.22, but current OpenMVS requires a newer CMake.
+# Install an up-to-date CMake from pip (lands in /usr/local/bin, ahead on PATH).
+RUN pip3 install --no-cache-dir "cmake>=3.28"
+
+# Ubuntu's libtinyxml2-dev ships only pkg-config, not the CMake config that
+# TinyEXIF's find_package(tinyxml2) needs — so build tinyxml2 from source.
+RUN git clone --depth 1 -b 10.0.0 https://github.com/leethomason/tinyxml2.git /opt/tinyxml2 && \
+    cmake -S /opt/tinyxml2 -B /opt/tinyxml2/build \
+      -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON && \
+    cmake --build /opt/tinyxml2/build --target install -j2 && \
+    ldconfig
+
+# TinyEXIF is required by OpenMVS master and is not packaged in apt.
+RUN git clone --depth 1 https://github.com/cdcseacave/TinyEXIF.git /opt/TinyEXIF && \
+    cmake -S /opt/TinyEXIF -B /opt/TinyEXIF/build \
+      -DCMAKE_BUILD_TYPE=Release -DBUILD_DEMO=OFF -DBUILD_SHARED_LIBS=ON && \
+    cmake --build /opt/TinyEXIF/build --target install -j2 && \
+    ldconfig
 
 # ---- Build OpenMVS (VCGLib + OpenMVS) -------------------------------------
 WORKDIR /opt
+# Out-of-source build into a distinct dir (the repo already ships a `build/`),
+# with CUDA disabled for this CPU-only image.
 RUN git clone --depth 1 https://github.com/cdcseacave/VCG.git vcglib && \
     git clone --depth 1 https://github.com/cdcseacave/openMVS.git openMVS && \
-    mkdir openMVS/build && cd openMVS/build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DVCG_ROOT=/opt/vcglib && \
-    make -j"$(nproc)" && make install && \
-    rm -rf /opt/openMVS/build/CMakeFiles
+    cmake -S openMVS -B openMVS_build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DVCG_ROOT=/opt/vcglib \
+      -DOpenMVS_USE_CUDA=OFF && \
+    cmake --build openMVS_build --target install -j2 && \
+    rm -rf /opt/openMVS_build
 
 # OpenMVS binaries install to /usr/local/bin/OpenMVS
 ENV OPENMVS_BIN_DIR=/usr/local/bin/OpenMVS
