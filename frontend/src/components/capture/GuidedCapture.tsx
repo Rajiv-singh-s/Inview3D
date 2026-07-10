@@ -325,8 +325,9 @@ export function GuidedCapture({
   useEffect(() => {
     if (capturePhase !== 'capturing' && capturePhase !== 'origin') return;
     const onOrientation = (e: DeviceOrientationEvent) => {
-      const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
-      const yawRaw = typeof webkit === 'number' ? webkit : e.alpha != null ? 360 - e.alpha : null;
+      // Ignore webkitCompassHeading to completely bypass magnetic/compass drift indoors.
+      // e.alpha is relative to the device's starting direction, which is extremely stable.
+      const yawRaw = e.alpha != null ? 360 - e.alpha : null;
       if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return;
       
       setHasCompass(true);
@@ -346,7 +347,19 @@ export function GuidedCapture({
         prevOrientRef.current = { yaw, pitch, t: now };
       }
 
-      setOrient({ yaw, pitch });
+      // Smooth orient with a low-pass filter to keep dots rock-solid on screen
+      setOrient((prevVal) => {
+        if (!prevVal) return { yaw, pitch };
+        
+        let dY = yaw - prevVal.yaw;
+        if (dY > 180) dY -= 360;
+        if (dY < -180) dY += 360;
+        
+        const smoothedYaw = (prevVal.yaw + dY * 0.25 + 360) % 360;
+        const smoothedPitch = prevVal.pitch + (pitch - prevVal.pitch) * 0.25;
+        
+        return { yaw: smoothedYaw, pitch: smoothedPitch };
+      });
     };
     
     // Simulate Positional drift warning

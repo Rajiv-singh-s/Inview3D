@@ -185,6 +185,14 @@ def main():
             eprint(f"Failed to read image: {filepath}")
             continue
 
+        # Center crop the image (70% region) to remove lens/perspective distortion at the edges
+        h, w = img.shape[:2]
+        crop_h = int(h * 0.70)
+        crop_w = int(w * 0.70)
+        start_y = (h - crop_h) // 2
+        start_x = (w - crop_w) // 2
+        img = img[start_y:start_y+crop_h, start_x:start_x+crop_w]
+
         # Scale down if too large
         h, w = img.shape[:2]
         if max(h, w) > max_dim:
@@ -317,6 +325,12 @@ def main():
     
     # Convert back to uint8
     final_face = np.clip(canvas_norm, 0, 255).astype(np.uint8)
+
+    # Zoom in slightly (6%) to ensure no black edges / boundaries remain unfilled
+    crop_size = int(S * 0.94)
+    start_offset = (S - crop_size) // 2
+    final_face_zoomed = final_face[start_offset:start_offset+crop_size, start_offset:start_offset+crop_size]
+    final_face = cv2.resize(final_face_zoomed, (S, S), interpolation=cv2.INTER_CUBIC)
 
     # Write output
     cv2.imwrite(output_path, final_face)
