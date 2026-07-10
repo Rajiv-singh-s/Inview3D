@@ -301,12 +301,24 @@ export function GuidedCapture({
       const localY = tx * ux + ty_vec * uy + tz * uz;
       
       if (localZ > 0) {
-        const screenX = 50 + ((localX / localZ) / hScale) * 50;
-        const screenY = 50 - ((localY / localZ) / vScale) * 50;
+        let screenX = 50 + ((localX / localZ) / hScale) * 50;
+        let screenY = 50 - ((localY / localZ) / vScale) * 50;
         
-        if (screenX >= -20 && screenX <= 120 && screenY >= -20 && screenY <= 120) {
-          visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
-        }
+        // Clamp to screen edges so they don't vanish
+        screenX = Math.max(4, Math.min(96, screenX));
+        screenY = Math.max(4, Math.min(96, screenY));
+        
+        visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
+      } else {
+        // Target is behind the camera. Clamp to the edge of the screen.
+        const len = Math.hypot(localX, localY) || 1;
+        const dirX = localX / len;
+        const dirY = localY / len;
+        // Project to the edge
+        const screenX = 50 + dirX * 46;
+        const screenY = 50 - dirY * 46;
+        
+        visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
       }
     });
 

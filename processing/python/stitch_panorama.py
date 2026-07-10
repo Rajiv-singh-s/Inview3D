@@ -70,7 +70,22 @@ def load_images(input_dir, max_dim):
 def estimate_cameras(images):
     """Recover each photo's rotation and focal length about a common centre."""
     finder = cv2.SIFT_create()
-    features = [cv2.detail.computeImageFeatures2(finder, img) for img in images]
+    
+    # Compute features and only keep images with enough features for the matcher
+    valid_images = []
+    features = []
+    for img in images:
+        feat = cv2.detail.computeImageFeatures2(finder, img)
+        if len(feat.getKeypoints()) >= 10:
+            valid_images.append(img)
+            features.append(feat)
+        else:
+            sys.stderr.write("Warning: dropping image with too few features.\n")
+            
+    if len(valid_images) < 2:
+        raise RuntimeError("Not enough textured photos to stitch (need at least 2). " + OVERLAP_HINT)
+        
+    images = valid_images
 
     matcher = cv2.detail_BestOf2NearestMatcher(False, 0.3)
     matches = matcher.apply2(features)
