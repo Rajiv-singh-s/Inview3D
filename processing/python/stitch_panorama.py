@@ -37,6 +37,11 @@ except ImportError as exc:  # pragma: no cover
 
 IMAGE_EXTS = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG")
 
+
+# Typical phone rear-camera horizontal field of view. Used only by the
+# pose-based fallback, where no focal length can be estimated from features.
+DEFAULT_HFOV_DEG = 65.0
+
 OVERLAP_HINT = (
     "Consecutive photos need enough overlap to match. Rotate in smaller steps, "
     "pivot on the spot rather than walking, and keep textured surfaces in frame "
@@ -45,12 +50,13 @@ OVERLAP_HINT = (
 
 
 def load_images(input_dir, max_dim):
+    """Returns (images, names) in capture order — names key the pose lookup."""
     paths = []
     for ext in IMAGE_EXTS:
         paths.extend(glob.glob(os.path.join(input_dir, ext)))
     paths = sorted(set(paths))
 
-    images = []
+    images, names = [], []
     for p in paths:
         img = cv2.imread(p)
         if img is None:
@@ -61,10 +67,66 @@ def load_images(input_dir, max_dim):
         if scale < 1.0:
             img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
         images.append(img)
+        names.append(os.path.basename(p))
 
     if len(images) < 2:
         raise ValueError("Need at least 2 readable photos, got {}".format(len(images)))
-    return images
+    return images, names
+
+
+def load_poses(path):
+    """Maps photo filename -> (yaw, pitch) in degrees, as recorded by the device."""
+    if not path:
+        return {}
+    with open(path) as fh:
+        entries = json.load(fh)
+    return {e["file"]: (float(e["yaw"]), float(e["pitch"])) for e in entries}
+
+
+def rotation_from_pose(yaw_deg, pitch_deg):
+    """Camera rotation for a device yawed then pitched about a fixed centre."""
+    y, p = math.radians(yaw_deg), math.radians(pitch_deg)
+    Ry = np.array(
+        [[math.cos(y), 0, math.sin(y)], [0, 1, 0], [-math.sin(y), 0, math.cos(y)]], np.float32
+    )
+    Rx = np.array(
+        [[1, 0, 0], [0, math.cos(p), -math.sin(p)], [0, math.sin(p), math.cos(p)]], np.float32
+    )
+    # World -> camera, so transpose the camera's orientation.
+    return (Ry @ Rx).T.astype(np.float32)
+
+
+def cameras_from_poses(images, names, poses, hfov_deg=DEFAULT_HFOV_DEG):
+    """
+    Build camera parameters straight from the device orientation.
+
+    Used when feature-based estimation cannot recover the rotations. The phone
+    genuinely knows where it was pointing, so this yields a correctly arranged
+    (if slightly less precise) sphere instead of no panorama at all.
+    """
+    kept_images, cameras = [], []
+    for img, name in zip(images, names):
+        if name not in poses:
+            continue
+        h, w = img.shape[:2]
+        focal = (w / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
+        cam = cv2.detail_CameraParams()
+        cam.focal = float(focal)
+        cam.aspect = 1.0
+        cam.ppx = w / 2.0
+        cam.ppy = h / 2.0
+        cam.t = np.zeros((3, 1), np.float32)
+        yaw, pitch = poses[name]
+        cam.R = rotation_from_pose(yaw, pitch)
+        kept_images.append(img)
+        cameras.append(cam)
+
+    if len(cameras) < 2:
+        raise RuntimeError(
+            "Feature matching failed and no usable device poses were recorded. " + OVERLAP_HINT
+        )
+    sys.stderr.write("Falling back to device poses for {} photos.\n".format(len(cameras)))
+    return kept_images, cameras
 
 
 def estimate_cameras(images):
@@ -165,8 +227,12 @@ def stitch_equirect(images, cameras, scale):
     """Warp every photo into one canonical 2:1 equirectangular canvas."""
     height = int(round(math.pi * scale))
     width = height * 2  # exact 2:1; the renderer relies on this
-    # The spherical warper maps theta,phi -> scale*theta, scale*phi, centred at 0.
-    dst_roi = (-width // 2, -height // 2, width, height)
+    # OpenCV's spherical projector maps
+    #     u = scale * atan2(x, z)                  -> centred, [-pi*scale, +pi*scale]
+    #     v = scale * (pi - acos(y / |p|))         -> top-origin, [0, pi*scale]
+    # so the canvas starts at y = 0, not -height/2. Centring it vertically
+    # offsets every warped tile by half the image and clips most of them away.
+    dst_roi = (-width // 2, 0, width, height)
 
     warper = cv2.PyRotationWarper("spherical", scale)
     blender = cv2.detail_MultiBandBlender()
@@ -222,13 +288,24 @@ def main():
     parser.add_argument("--output", required=True, help="Path to write the panorama JPEG")
     parser.add_argument("--max-dim", type=int, default=1600, help="Downscale each source photo to this longest side")
     parser.add_argument("--max-width", type=int, default=8192, help="Maximum equirectangular width")
+    parser.add_argument("--poses", help="JSON of device orientations recorded per photo")
     args = parser.parse_args()
 
     try:
-        images = load_images(args.input, args.max_dim)
-        sys.stdout.write("Stitching {} photos...\n".format(len(images)))
+        images, names = load_images(args.input, args.max_dim)
+        poses = load_poses(args.poses)
+        sys.stdout.write(
+            "Stitching {} photos ({} device poses)...\n".format(len(images), len(poses))
+        )
 
-        images, cameras = estimate_cameras(images)
+        try:
+            images, cameras = estimate_cameras(images)
+        except Exception as exc:
+            if not poses:
+                raise
+            sys.stderr.write("Feature-based estimation failed ({}).\n".format(exc))
+            images, cameras = cameras_from_poses(images, names, poses)
+
         scale = equirect_scale(cameras, args.max_width)
         pano = stitch_equirect(images, cameras, scale)
 

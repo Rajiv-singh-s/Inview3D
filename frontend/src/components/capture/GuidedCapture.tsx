@@ -41,6 +41,14 @@ const TOLERANCE_DEG = 8;
 const CAPTURE_DWELL_MS = 300;
 /** Targets further off-axis than this get no dot — they are behind you. */
 const MAX_DOT_BEARING_DEG = 120;
+/**
+ * A frame blurrier than this is rejected rather than stitched. Laplacian
+ * variance on a 160px-wide grayscale copy; motion-blurred phone frames land far
+ * below this, sharp indoor frames comfortably above.
+ */
+const MIN_SHARPNESS = 12;
+/** Rotating faster than this guarantees motion blur, so don't even dwell. */
+const MAX_ROTATION_DEG_PER_SEC = 25;
 /** Where the eight direction anchors sit, as a percentage of the frame. */
 const DOT_RADIUS_X = 42;
 const DOT_RADIUS_Y = 30;
@@ -54,6 +62,45 @@ export interface CapturedShot {
 /** Smallest signed angle from `a` to `b`, in (-180, 180]. */
 function angleDelta(a: number, b: number): number {
   return ((((b - a) % 360) + 540) % 360) - 180;
+}
+
+/**
+ * Variance of the Laplacian — the standard blur metric. A sharp frame has
+ * strong second derivatives; a motion-blurred one is smooth, so the variance
+ * collapses. Computed on a small grayscale copy to stay cheap enough to run on
+ * every candidate frame.
+ */
+function sharpness(video: HTMLVideoElement): number {
+  const W = 160;
+  const H = Math.max(1, Math.round((video.videoHeight / video.videoWidth) * W));
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return Number.POSITIVE_INFINITY; // cannot measure; don't block capture
+  ctx.drawImage(video, 0, 0, W, H);
+  const { data } = ctx.getImageData(0, 0, W, H);
+
+  const gray = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+  }
+
+  let sum = 0;
+  let sumSq = 0;
+  let n = 0;
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      // 4-neighbour Laplacian kernel.
+      const lap = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - W] - gray[i + W];
+      sum += lap;
+      sumSq += lap * lap;
+      n++;
+    }
+  }
+  const mean = sum / n;
+  return sumSq / n - mean * mean;
 }
 
 /** Build a smooth sweep order (alternating yaw direction per ring). */
@@ -131,6 +178,11 @@ export function GuidedCapture({
   /** Flash overlay when a shot is auto-captured. */
   const [flash, setFlash] = useState(false);
   const [dwellProgress, setDwellProgress] = useState(0);
+  /** Why the last capture attempt was refused, shown to the user. */
+  const [rejected, setRejected] = useState<string | null>(null);
+  /** Angular speed in deg/s, derived from successive orientation events. */
+  const rotSpeedRef = useRef(0);
+  const prevOrientRef = useRef<{ yaw: number; pitch: number; t: number } | null>(null);
   const [capturePhase, setCapturePhase] = useState<'capturing' | 'review'>('capturing');
   const [isPrivate, setIsPrivate] = useState(false);
 
@@ -198,6 +250,22 @@ export function GuidedCapture({
       setHasCompass(true);
       const yaw = ((yawRaw % 360) + 360) % 360;
       const pitch = Math.max(-90, Math.min(90, e.beta - 90));
+
+      // Angular speed, so we can refuse to shoot while the phone is sweeping.
+      const now = performance.now();
+      const prev = prevOrientRef.current;
+      if (prev) {
+        const dt = (now - prev.t) / 1000;
+        if (dt > 0.01) {
+          const moved = Math.hypot(angleDelta(prev.yaw, yaw), pitch - prev.pitch);
+          // Light smoothing; raw orientation events are noisy.
+          rotSpeedRef.current = 0.6 * rotSpeedRef.current + 0.4 * (moved / dt);
+          prevOrientRef.current = { yaw, pitch, t: now };
+        }
+      } else {
+        prevOrientRef.current = { yaw, pitch, t: now };
+      }
+
       setOrient({ yaw, pitch });
       if (baseYawRef.current == null) baseYawRef.current = yaw;
     };
@@ -214,6 +282,18 @@ export function GuidedCapture({
     (targetIndex: number) => {
       const video = videoRef.current;
       if (!video || capturingRef.current || video.videoWidth === 0) return;
+
+      // Reject blurred frames before they ever reach the stitcher. A blurred
+      // photo yields few, badly localised features and drags the whole bundle
+      // adjustment off; dropping it and re-shooting is strictly better.
+      const sharp = sharpness(video);
+      if (sharp < MIN_SHARPNESS) {
+        setRejected('Hold steady — frame too blurry');
+        alignedSinceRef.current = null;
+        setDwellProgress(0);
+        return;
+      }
+      setRejected(null);
       capturingRef.current = true;
 
       const shotIndex = shotsLengthRef.current;
@@ -318,6 +398,18 @@ export function GuidedCapture({
 
     let animFrame: number;
     const updateProgress = () => {
+      // Sweeping fast guarantees motion blur, so don't even begin the dwell.
+      if (rotSpeedRef.current > MAX_ROTATION_DEG_PER_SEC) {
+        alignedSinceRef.current = null;
+        setDwellProgress(0);
+        setRejected('Slow down');
+        animFrame = requestAnimationFrame(updateProgress);
+        return;
+      }
+      // Settled again — retire the speed warning (blur warnings clear on the
+      // next successful shot).
+      setRejected((r) => (r === 'Slow down' ? null : r));
+
       if (current.dist <= TOLERANCE_DEG) {
         const now = Date.now();
         if (alignedSinceRef.current == null) {
@@ -529,10 +621,14 @@ export function GuidedCapture({
           </div>
         </div>
 
-        {/* Which way to move to reach the next target. */}
-        {hasCompass && directionHint && (
-          <div className="absolute left-1/2 top-[63%] -translate-x-1/2 rounded-full bg-black/55 px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm">
-            {directionHint}
+        {/* Why a shot was refused takes priority over where to go next. */}
+        {hasCompass && (rejected || directionHint) && (
+          <div
+            className={`absolute left-1/2 top-[63%] -translate-x-1/2 rounded-full px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm ${
+              rejected ? 'bg-amber-600/80' : 'bg-black/55'
+            }`}
+          >
+            {rejected ?? directionHint}
           </div>
         )}
       </div>

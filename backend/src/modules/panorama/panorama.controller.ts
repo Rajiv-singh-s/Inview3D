@@ -44,8 +44,10 @@ export class PanoramaController {
   async createCapture(
     @UploadedFiles() photos: Express.Multer.File[],
     @Body('name') name?: string,
+    /** JSON-encoded array of `{ yaw, pitch }`, one per photo, in capture order. */
+    @Body('poses') poses?: string,
   ) {
-    const project = await this.capture.handleCapture(photos, name);
+    const project = await this.capture.handleCapture(photos, name, poses);
     return {
       id: project.id,
       status: project.status,

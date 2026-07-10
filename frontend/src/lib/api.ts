@@ -63,6 +63,8 @@ export const api = {
   uploadCapture(
     photos: Blob[],
     name: string,
+    /** Device orientation per photo, in capture order. Same length as `photos`. */
+    poses: Array<{ yaw: number; pitch: number }>,
     onProgress?: (percent: number) => void,
     signal?: AbortSignal,
   ): Promise<CaptureResponse> {
@@ -71,6 +73,9 @@ export const api = {
       const form = new FormData();
       photos.forEach((p, i) => form.append('photos', p, `photo_${String(i).padStart(3, '0')}.jpg`));
       form.append('name', name);
+      // The phone already knows where it was pointing; the stitcher should not
+      // have to rediscover that from pixels alone.
+      form.append('poses', JSON.stringify(poses));
 
       xhr.open('POST', `${getApiBaseUrl()}/panorama/capture`);
       xhr.upload.onprogress = (e) => {

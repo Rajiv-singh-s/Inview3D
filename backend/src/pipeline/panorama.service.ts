@@ -114,6 +114,13 @@ export class PanoramaService {
       '--max-width',
       String(this.app.panoramaMaxWidth),
     ];
+    // Device poses are optional: they rescue captures where feature matching
+    // alone cannot recover the rotations.
+    const posesFile = path.join(ws.root, 'poses.json');
+    if (fs.existsSync(posesFile)) {
+      args.push('--poses', posesFile);
+      log.info('Using device poses recorded during capture');
+    }
     
     // On Windows, 'python' is the standard executable, whereas 'python3' is common on Unix.
     const primaryCmd = process.platform === 'win32' ? 'python' : 'python3';
