@@ -5,10 +5,12 @@ import * as path from 'path';
 import { customAlphabet } from 'nanoid';
 import { AppConfig } from '../../config/configuration';
 import {
+  PANORAMA_STEPS,
   PIPELINE_STEPS,
   PipelineStepId,
   PipelineStepState,
   Project,
+  ProjectKind,
   ProjectStatus,
   VideoInfo,
 } from '../../common/interfaces';
@@ -27,9 +29,12 @@ export class ProjectsService implements OnModuleInit {
   private readonly logger = new Logger(ProjectsService.name);
   private readonly projects = new Map<string, Project>();
   private readonly outputPath: string;
+  private readonly uploadPath: string;
 
   constructor(config: ConfigService) {
-    this.outputPath = config.getOrThrow<AppConfig>('app').outputPath;
+    const app = config.getOrThrow<AppConfig>('app');
+    this.outputPath = app.outputPath;
+    this.uploadPath = app.uploadPath;
   }
 
   /** Rehydrate any previously persisted projects on boot. */
@@ -41,6 +46,8 @@ export class ProjectsService implements OnModuleInit {
       if (!fs.existsSync(file)) continue;
       try {
         const project = JSON.parse(fs.readFileSync(file, 'utf8')) as Project;
+        // Projects persisted before `kind` existed are all mesh reconstructions.
+        project.kind ??= 'mesh';
         // Any project left mid-flight after a crash is marked failed.
         if (project.status === 'processing' || project.status === 'queued') {
           project.status = 'failed';
@@ -64,10 +71,20 @@ export class ProjectsService implements OnModuleInit {
     fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify(project, null, 2), 'utf8');
   }
 
-  create(params: { originalName: string; originalPath: string; videoInfo?: VideoInfo }): Project {
+  create(params: {
+    originalName: string;
+    originalPath: string;
+    videoInfo?: VideoInfo;
+    /** Defaults to the video->mesh pipeline. */
+    kind?: ProjectKind;
+    photoCount?: number;
+  }): Project {
     const now = new Date().toISOString();
+    const kind: ProjectKind = params.kind ?? 'mesh';
+    const stepTemplate = kind === 'panorama' ? PANORAMA_STEPS : PIPELINE_STEPS;
     const project: Project = {
       id: nanoid(),
+      kind,
       status: 'uploaded',
       progress: 0,
       createdAt: now,
@@ -75,7 +92,8 @@ export class ProjectsService implements OnModuleInit {
       originalName: params.originalName,
       originalPath: params.originalPath,
       videoInfo: params.videoInfo,
-      steps: PIPELINE_STEPS.map(
+      photoCount: params.photoCount,
+      steps: stepTemplate.map(
         (s): PipelineStepState => ({ id: s.id, label: s.label, status: 'pending' }),
       ),
     };
@@ -136,17 +154,11 @@ export class ProjectsService implements OnModuleInit {
 
   /** Remove a project record and all of its on-disk artifacts. */
   remove(id: string): void {
-    const project = this.findOne(id);
-    // Remove output artifacts.
+    this.findOne(id); // 404 if unknown
+    // Both workspaces are keyed directly by project id, so derive them from the
+    // configured roots rather than from a stored path (which differs per kind).
     fs.rmSync(this.projectDir(id), { recursive: true, force: true });
-    // Remove preserved original + upload workspace.
-    if (project.originalPath && fs.existsSync(project.originalPath)) {
-      const uploadDir = path.dirname(path.dirname(project.originalPath));
-      // uploadDir is `<uploads>/<id>` — guard against deleting anything else.
-      if (path.basename(uploadDir) === id) {
-        fs.rmSync(uploadDir, { recursive: true, force: true });
-      }
-    }
+    fs.rmSync(path.join(this.uploadPath, id), { recursive: true, force: true });
     this.projects.delete(id);
   }
 }

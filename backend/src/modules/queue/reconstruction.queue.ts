@@ -1,7 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import { Queue } from 'bullmq';
-import { ReconstructionJobData } from '../../common/interfaces';
+import { ProjectKind, ReconstructionJobData } from '../../common/interfaces';
 import { RECONSTRUCTION_JOB, RECONSTRUCTION_QUEUE } from './queue.constants';
 
 /**
@@ -16,10 +16,10 @@ export class ReconstructionQueue {
   ) {}
 
   /** Enqueue a reconstruction job keyed by projectId (also used as jobId). */
-  async enqueue(projectId: string): Promise<void> {
+  async enqueue(projectId: string, kind: ProjectKind = 'mesh'): Promise<void> {
     await this.queue.add(
       RECONSTRUCTION_JOB,
-      { projectId },
+      { projectId, kind },
       {
         jobId: projectId,
         attempts: 1, // reconstruction is expensive & non-idempotent — no auto retry

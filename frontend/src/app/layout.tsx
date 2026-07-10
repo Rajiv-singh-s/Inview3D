@@ -24,6 +24,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <span>InView3D</span>
                 </Link>
                 <div className="flex items-center gap-6 text-sm text-slate-300">
+                  <Link href="/capture" className="hover:text-white">
+                    Capture
+                  </Link>
                   <Link href="/upload" className="hover:text-white">
                     Upload
                   </Link>

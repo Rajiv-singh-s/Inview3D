@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { ReconstructionJobData } from '../../common/interfaces';
+import { PanoramaService } from '../../pipeline/panorama.service';
 import { PipelineService } from '../../pipeline/pipeline.service';
 import { ProjectsService } from '../projects/projects.service';
 import { RECONSTRUCTION_QUEUE } from './queue.constants';
@@ -16,6 +17,7 @@ export class ReconstructionProcessor extends WorkerHost {
 
   constructor(
     private readonly pipeline: PipelineService,
+    private readonly panorama: PanoramaService,
     private readonly projects: ProjectsService,
   ) {
     super();
@@ -23,9 +25,15 @@ export class ReconstructionProcessor extends WorkerHost {
 
   async process(job: Job<ReconstructionJobData>): Promise<void> {
     const { projectId } = job.data;
-    this.logger.log(`Processing reconstruction for project ${projectId}`);
+    // Fall back to the project record so jobs enqueued without `kind` still route.
+    const kind = job.data.kind ?? this.projects.findOne(projectId).kind ?? 'mesh';
+    this.logger.log(`Processing ${kind} reconstruction for project ${projectId}`);
     try {
-      await this.pipeline.run(projectId);
+      if (kind === 'panorama') {
+        await this.panorama.run(projectId);
+      } else {
+        await this.pipeline.run(projectId);
+      }
       await job.updateProgress(100);
     } catch (err) {
       const message = (err as Error).message;

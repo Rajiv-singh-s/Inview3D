@@ -106,6 +106,47 @@ export const api = {
     });
   },
 
+  /**
+   * Upload a guided capture. Photos must be appended in capture order — the
+   * stitcher relies on consecutive shots overlapping.
+   */
+  uploadCapture(
+    photos: Blob[],
+    name: string,
+    onProgress?: (percent: number) => void,
+    signal?: AbortSignal,
+  ): Promise<{ id: string; kind: 'panorama'; photoCount: number }> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const form = new FormData();
+      photos.forEach((p, i) => form.append('photos', p, `photo_${String(i).padStart(3, '0')}.jpg`));
+      form.append('name', name);
+
+      xhr.open('POST', `${getApiBaseUrl()}/panorama/capture`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          let message = `Upload failed (${xhr.status})`;
+          try {
+            const m = JSON.parse(xhr.responseText)?.message;
+            message = Array.isArray(m) ? m.join(', ') : (m ?? message);
+          } catch {
+            /* ignore */
+          }
+          reject(new ApiError(message, xhr.status));
+        }
+      };
+      xhr.onerror = () => reject(new ApiError('Network error while uploading photos', 0));
+      xhr.onabort = () => reject(new ApiError('Upload canceled', 0));
+      if (signal) signal.addEventListener('abort', () => xhr.abort());
+      xhr.send(form);
+    });
+  },
+
   listProjects: () => request<Project[]>('/projects'),
   getProject: (id: string) => request<Project>(`/project/${id}`),
   getStatus: (id: string) => request<StatusResponse>(`/status/${id}`),
@@ -113,6 +154,9 @@ export const api = {
   deleteProject: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/project/${id}`, { method: 'DELETE' }),
 
-  /** Absolute URL of the generated GLB for a completed project. */
+  /** Absolute URL of the generated GLB for a completed mesh project. */
   modelUrl: (id: string) => `${getApiBaseUrl()}/model/${id}`,
+
+  /** Absolute URL of the stitched photosphere for a completed panorama project. */
+  panoramaUrl: (id: string) => `${getApiBaseUrl()}/panorama/${id}`,
 };

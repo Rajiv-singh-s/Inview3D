@@ -56,20 +56,43 @@ export class ProjectsController {
     };
   }
 
-  /** GET /viewer/:id — metadata the 3D viewer needs to load the model. */
+  /**
+   * GET /viewer/:id — metadata the viewer needs. The shape depends on `kind`:
+   * a mesh project yields a GLB url, a panorama project a photosphere url plus
+   * its aspect ratio (a partial rotation is not a full 2:1 equirectangular).
+   */
   @Get('viewer/:id')
   viewer(@Param('id') id: string) {
     const p = this.projects.findOne(id);
-    if (p.status !== 'completed' || !p.glbPath) {
-      throw new NotFoundException('Model is not ready for this project yet');
+    if (p.status !== 'completed') {
+      throw new NotFoundException('This project is not ready yet');
     }
-    return {
+
+    const base = {
       id: p.id,
+      kind: p.kind,
       originalName: p.originalName,
+      completedAt: p.updatedAt,
+    };
+
+    if (p.kind === 'panorama') {
+      if (!p.panoramaPath) throw new NotFoundException('Panorama is not ready for this project');
+      return {
+        ...base,
+        panoramaUrl: `/panorama/${p.id}`,
+        panoramaSizeBytes: p.panoramaSizeBytes,
+        width: p.panoramaWidth,
+        height: p.panoramaHeight,
+        photoCount: p.photoCount,
+      };
+    }
+
+    if (!p.glbPath) throw new NotFoundException('Model is not ready for this project yet');
+    return {
+      ...base,
       videoInfo: p.videoInfo,
       modelUrl: `/model/${p.id}`,
       glbSizeBytes: p.glbSizeBytes,
-      completedAt: p.updatedAt,
     };
   }
 

@@ -34,6 +34,7 @@ export interface PipelineStepState {
 
 export interface Project {
   id: string;
+  kind: ProjectKind;
   status: ProjectStatus;
   progress: number;
   createdAt: string;
@@ -54,14 +55,35 @@ export interface StatusResponse {
   updatedAt: string;
 }
 
-export interface ViewerMetadata {
+/** Which pipeline produced a project's output. */
+export type ProjectKind = 'mesh' | 'panorama';
+
+interface ViewerMetadataBase {
   id: string;
+  kind: ProjectKind;
   originalName: string;
+  completedAt: string;
+}
+
+/** Video -> COLMAP/OpenMVS -> textured GLB, orbited from outside. */
+export interface MeshViewerMetadata extends ViewerMetadataBase {
+  kind: 'mesh';
   videoInfo?: VideoInfo;
   modelUrl: string;
   glbSizeBytes?: number;
-  completedAt: string;
 }
+
+/** Guided photo capture -> stitched photosphere, viewed from inside. */
+export interface PanoramaViewerMetadata extends ViewerMetadataBase {
+  kind: 'panorama';
+  panoramaUrl: string;
+  panoramaSizeBytes?: number;
+  width?: number;
+  height?: number;
+  photoCount?: number;
+}
+
+export type ViewerMetadata = MeshViewerMetadata | PanoramaViewerMetadata;
 
 export interface UploadResponse {
   id: string;

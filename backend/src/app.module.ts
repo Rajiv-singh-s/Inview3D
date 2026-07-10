@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import configuration from './config/configuration';
+import { PanoramaModule } from './modules/panorama/panorama.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { QueueModule } from './modules/queue/queue.module';
 import { UploadModule } from './modules/upload/upload.module';
@@ -21,6 +22,7 @@ import { HealthController } from './health.controller';
     ProjectsModule,
     QueueModule,
     UploadModule,
+    PanoramaModule,
   ],
   controllers: [HealthController],
 })

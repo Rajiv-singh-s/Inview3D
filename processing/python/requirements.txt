@@ -1,4 +1,6 @@
-# Python dependencies for the GLB conversion step.
+# Python dependencies for the GLB conversion and panorama stitching steps.
 trimesh==4.5.3
 numpy==1.26.4
 pillow==10.4.0
+# Headless build: no GUI libs needed inside the container.
+opencv-python-headless==4.10.0.84

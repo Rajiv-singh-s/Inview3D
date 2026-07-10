@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { PipelineLoggerFactory } from '../common/logger/pipeline-logger.service';
+import { PanoramaService } from './panorama.service';
 import { PipelineService } from './pipeline.service';
 
-/** Provides the pipeline runner and its logger factory. */
+/** Provides both pipeline runners (mesh + panorama) and their logger factory. */
 @Module({
-  providers: [PipelineService, PipelineLoggerFactory],
-  exports: [PipelineService],
+  providers: [PipelineService, PanoramaService, PipelineLoggerFactory],
+  exports: [PipelineService, PanoramaService],
 })
 export class PipelineModule {}

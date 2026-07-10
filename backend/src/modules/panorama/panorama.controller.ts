@@ -1,0 +1,70 @@
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  NotFoundException,
+  Param,
+  Post,
+  Res,
+  StreamableFile,
+  UploadedFiles,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { ConfigService } from '@nestjs/config';
+import type { Response } from 'express';
+import * as fs from 'fs';
+import * as path from 'path';
+import { AppConfig } from '../../config/configuration';
+import { ProjectsService } from '../projects/projects.service';
+import { PanoramaCaptureService } from './panorama-capture.service';
+
+/** Upper bound on photos per capture; the guided UI shoots ~16. */
+const MAX_PHOTOS = 48;
+
+@Controller()
+export class PanoramaController {
+  private readonly outputPath: string;
+
+  constructor(
+    private readonly capture: PanoramaCaptureService,
+    private readonly projects: ProjectsService,
+    config: ConfigService,
+  ) {
+    this.outputPath = config.getOrThrow<AppConfig>('app').outputPath;
+  }
+
+  /**
+   * POST /panorama/capture — multipart with repeated `photos` fields, in
+   * capture order, plus an optional `name`.
+   */
+  @Post('panorama/capture')
+  @UseInterceptors(FilesInterceptor('photos', MAX_PHOTOS))
+  async createCapture(
+    @UploadedFiles() photos: Express.Multer.File[],
+    @Body('name') name?: string,
+  ) {
+    const project = await this.capture.handleCapture(photos, name);
+    return {
+      id: project.id,
+      kind: project.kind,
+      status: project.status,
+      photoCount: project.photoCount,
+      originalName: project.originalName,
+    };
+  }
+
+  /** GET /panorama/:id — stream the stitched photosphere JPEG. */
+  @Get('panorama/:id')
+  @Header('Content-Type', 'image/jpeg')
+  @Header('Cache-Control', 'public, max-age=31536000, immutable')
+  panorama(@Param('id') id: string, @Res({ passthrough: true }) res: Response): StreamableFile {
+    const project = this.projects.findOne(id);
+    if (!project.panoramaPath) throw new NotFoundException('No panorama available yet');
+    const abs = path.join(this.outputPath, project.panoramaPath);
+    if (!fs.existsSync(abs)) throw new NotFoundException('Panorama file is missing on disk');
+    res.set('Content-Disposition', `inline; filename="${id}.jpg"`);
+    return new StreamableFile(fs.createReadStream(abs));
+  }
+}

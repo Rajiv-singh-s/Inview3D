@@ -34,8 +34,23 @@ export type ProjectStatus =
   | 'failed'
   | 'canceled';
 
-/** Ordered pipeline steps. Keep in sync with {@link PIPELINE_STEPS}. */
+/**
+ * Two reconstruction products, with different capture inputs and viewers:
+ *
+ * - `mesh`      — walkthrough video -> COLMAP + OpenMVS -> textured GLB,
+ *                 viewed from outside with orbit controls.
+ * - `panorama`  — photos captured rotating in place -> OpenCV stitching ->
+ *                 photosphere, viewed from inside a sphere (Street View style).
+ */
+export type ProjectKind = 'mesh' | 'panorama';
+
+/** Ordered pipeline steps. Keep in sync with {@link PIPELINE_STEPS} / {@link PANORAMA_STEPS}. */
 export type PipelineStepId =
+  // panorama pipeline
+  | 'validate-photos'
+  | 'stitch-panorama'
+  | 'optimize-panorama'
+  // mesh pipeline
   | 'validate'
   | 'transcode'
   | 'extract-frames'
@@ -68,6 +83,8 @@ export interface PipelineStepState {
 /** The full record persisted per project. */
 export interface Project {
   id: string;
+  /** Which pipeline produced (or will produce) this project's output. */
+  kind: ProjectKind;
   status: ProjectStatus;
   /** Overall progress 0–100. */
   progress: number;
@@ -86,10 +103,19 @@ export interface Project {
   /** Per-step state, in execution order. */
   steps: PipelineStepState[];
 
-  /** Relative (to OUTPUT_PATH) path of the final GLB once produced. */
+  /** Relative (to OUTPUT_PATH) path of the final GLB once produced (kind === 'mesh'). */
   glbPath?: string;
   /** Size of the produced GLB in bytes. */
   glbSizeBytes?: number;
+
+  /** Relative (to OUTPUT_PATH) path of the stitched photosphere (kind === 'panorama'). */
+  panoramaPath?: string;
+  panoramaSizeBytes?: number;
+  /** Pixel dimensions of the stitched panorama. */
+  panoramaWidth?: number;
+  panoramaHeight?: number;
+  /** How many source photos were captured. */
+  photoCount?: number;
 
   /** Populated when status === 'failed'. */
   error?: string;
@@ -113,7 +139,17 @@ export const PIPELINE_STEPS: ReadonlyArray<{ id: PipelineStepId; label: string }
   { id: 'store-output', label: 'Store output' },
 ] as const;
 
+/** Ordered steps for the panorama (photosphere) pipeline. */
+export const PANORAMA_STEPS: ReadonlyArray<{ id: PipelineStepId; label: string }> = [
+  { id: 'validate-photos', label: 'Validate photos' },
+  { id: 'stitch-panorama', label: 'Stitch photosphere' },
+  { id: 'optimize-panorama', label: 'Optimize panorama' },
+  { id: 'store-output', label: 'Store output' },
+] as const;
+
 /** Payload carried by the reconstruction BullMQ job. */
 export interface ReconstructionJobData {
   projectId: string;
+  /** Defaults to 'mesh' for jobs enqueued before this field existed. */
+  kind?: ProjectKind;
 }
