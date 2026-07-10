@@ -5,19 +5,18 @@ export const CUBE_FACES = ['front', 'right', 'back', 'left', 'top', 'bottom'] as
 export type CubeFace = (typeof CUBE_FACES)[number];
 
 /**
- * Resolution of each face texture. High-res so accumulated captures keep detail.
- * Every painted face allocates ~FACE_SIZE² · 8 bytes (RGBA + weight), so six
- * faces at 2048 is ~200 MB — acceptable on modern phones, lower this if needed.
+ * Resolution of each face texture. Configurable: 1024 (fast), 1536 (balanced),
+ * 2048 (high quality), 4096 (ultra). Every painted face allocates
+ * ~FACE_SIZE² · 8 bytes (RGBA + weight), so six faces at 1536 is ~108 MB.
  */
-const FACE_SIZE = 2048;
+export const FACE_SIZE = 1536;
 
 /**
- * A face counts as "captured" for guidance once this fraction of it has real
- * pixels. One centred shot through a ~68° camera covers the middle ~half of a
- * 90° face, so a modest threshold lets the six-target flow complete while still
- * letting overlapping captures keep enriching the face beyond it.
+ * A single face counts as "having coverage" once this fraction of its texels
+ * have received real projected pixels. Used by per-face helpers; the continuous
+ * capture engine uses totalCoverage() for completion instead.
  */
-const CAPTURE_COVERAGE_THRESHOLD = 0.25;
+const CAPTURE_COVERAGE_THRESHOLD = 0.15;
 
 /** A device pose: yaw/pitch of the camera relative to the capture origin (deg). */
 export interface CameraPose {
@@ -275,6 +274,27 @@ export class CubeFaces {
 
   paintedCount(): number {
     return CUBE_FACES.filter((f) => this.isPainted(f)).length;
+  }
+
+  /** Average coverage across all 6 faces (0–1). The primary completion metric. */
+  totalCoverage(): number {
+    let sum = 0;
+    for (const face of CUBE_FACES) sum += this.coverageOf(face);
+    return sum / CUBE_FACES.length;
+  }
+
+  /** Returns the face with the least coverage, for gentle nudge guidance. */
+  leastCoveredFace(): CubeFace {
+    let minFace: CubeFace = 'front';
+    let minCov = Infinity;
+    for (const face of CUBE_FACES) {
+      const c = this.coverageOf(face);
+      if (c < minCov) {
+        minCov = c;
+        minFace = face;
+      }
+    }
+    return minFace;
   }
 
   /** Exports every painted face as a JPEG blob for upload. */

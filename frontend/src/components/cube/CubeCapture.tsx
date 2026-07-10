@@ -5,23 +5,28 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
 import { CubeFaces } from './cubeFaces';
 import { CubeScene, LookRef } from './CubeScene';
-import { FACE_TARGETS, aimError, directionHint, readAim } from './orientation';
+import { angleDelta, coverageHint, readAim } from './orientation';
 import { sharpness } from './quality';
 
-/** Alignment tolerance (deg) to the target aim before capture can fire. */
-const TOLERANCE_DEG = 12;
-/** Hold aligned + steady this long before auto-capture, to reject transients. */
-const DWELL_MS = 400;
+// ---- Tuning Constants -----------------------------------------------------
+
 /** Sweeping faster than this guarantees motion blur; refuse to capture. */
 const MAX_ROTATION_DEG_PER_SEC = 20;
 /** Frames below this Laplacian variance are rejected as blurred. */
-const MIN_SHARPNESS = 10;
+const MIN_SHARPNESS = 8;
+/** Minimum angular rotation (deg) since last accepted frame before capturing again. */
+const MIN_ROTATION_SINCE_LAST = 5;
+/** Minimum milliseconds between accepted frames, to avoid overwhelming the projector. */
+const MIN_CAPTURE_INTERVAL_MS = 200;
 /**
- * Assumed horizontal field of view of the rear camera, in degrees — the one
- * intrinsic the browser will not tell us. Used to project each frame into cube
- * space. Typical phone main cameras sit around 65–70°.
+ * Assumed horizontal field of view of the rear camera, in degrees.
+ * Typical phone main cameras sit around 65–70°.
  */
 const CAMERA_HFOV_DEG = 68;
+/** Coverage fraction at which the capture auto-completes. */
+const AUTO_COMPLETE_COVERAGE = 0.92;
+/** Hard ceiling — stop accepting frames past this coverage. */
+const HARD_LIMIT_COVERAGE = 0.98;
 
 interface CubeCaptureProps {
   /** Called with the new project id once the finalized cube is stored. */
@@ -30,17 +35,13 @@ interface CubeCaptureProps {
 }
 
 /**
- * The room cube is built live, during capture, exactly as the reference model
- * demands:
+ * Continuous cubemap capture engine.
  *
- *   start -> empty black cube -> guide to a face -> validate (aim, stability,
- *   focus) -> auto-capture -> project onto that face instantly -> guide next
- *   -> ... -> finalize.
- *
- * The full-screen 3D view is the cube itself, seen from the inside and steered
- * by the device orientation, so the user watches the room appear around them as
- * they turn. The circular viewfinder shows the live camera that feeds it. There
- * is no post-capture stitch: finishing just uploads the six painted faces.
+ * The user sees a live 3D cube from the inside, steered by their phone's
+ * orientation. As they rotate freely, frames are automatically accepted when
+ * stable + sharp + sufficiently rotated, and projected into the cubemap in
+ * real time. The room appears around them progressively. No predefined face
+ * targets, no shutter button — just rotate and watch.
  */
 export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -48,30 +49,32 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
   const cube = useMemo(() => new CubeFaces(), []);
   const look = useRef<LookRef>({ yaw: 0, pitch: 0 });
 
-  // Orientation tracking, all in refs so the rAF loop reads current values.
+  // Orientation tracking — all in refs so the rAF loop reads current values.
   const baseYawRef = useRef<number | null>(null);
   const aimRef = useRef({ yaw: 0, pitch: 0 });
   const rotSpeedRef = useRef(0);
   const prevAimRef = useRef<{ yaw: number; pitch: number; t: number } | null>(null);
+
+  // Continuous capture state
+  const lastCaptureAimRef = useRef<{ yaw: number; pitch: number } | null>(null);
+  const lastCaptureTimeRef = useRef(0);
   const capturingRef = useRef(false);
-  const dwellStartRef = useRef<number | null>(null);
-  const targetIndexRef = useRef(0);
+  const acceptedCountRef = useRef(0);
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCompass, setHasCompass] = useState(false);
-  const [targetIndex, setTargetIndex] = useState(0);
-  const [paintedCount, setPaintedCount] = useState(0);
+  const [coverage, setCoverage] = useState(0);
+  const [acceptedCount, setAcceptedCount] = useState(0);
   const [flash, setFlash] = useState(false);
-  const [dwell, setDwell] = useState(0);
   const [hint, setHint] = useState<string | null>(null);
   const [reason, setReason] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [autoCompleted, setAutoCompleted] = useState(false);
 
-  const target = FACE_TARGETS[Math.min(targetIndex, FACE_TARGETS.length - 1)];
-  const done = paintedCount >= FACE_TARGETS.length;
+  const done = coverage >= AUTO_COMPLETE_COVERAGE || autoCompleted;
 
-  // ---- camera ------------------------------------------------------------
+  // ---- camera --------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -108,7 +111,7 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     };
   }, [cube]);
 
-  // ---- device orientation drives both aim and the live cube camera -------
+  // ---- device orientation drives both aim and the live cube camera ---------
   useEffect(() => {
     const onOrientation = (e: DeviceOrientationEvent) => {
       const raw = readAim(e);
@@ -145,90 +148,102 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
 
   const triggerFlash = useCallback(() => {
     setFlash(true);
-    setTimeout(() => setFlash(false), 130);
+    setTimeout(() => setFlash(false), 100);
   }, []);
 
-  /** Grab the current video frame and project it into the cube at the given pose. */
-  const captureFace = useCallback(
-    (faceIndex: number): boolean => {
-      const video = videoRef.current;
-      if (!video || video.videoWidth === 0 || capturingRef.current) return false;
-      const t = FACE_TARGETS[faceIndex];
-      if (!t || cube.isCaptured(t.face)) return false;
+  /** Grab the current video frame and project it into the cube. */
+  const captureFrame = useCallback((): boolean => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth === 0 || capturingRef.current) return false;
 
-      const sharp = sharpness(video, video.videoWidth, video.videoHeight);
-      if (sharp < MIN_SHARPNESS) {
-        setReason('Hold steady — too blurry');
-        dwellStartRef.current = null;
-        setDwell(0);
-        return false;
-      }
+    const sharp = sharpness(video, video.videoWidth, video.videoHeight);
+    if (sharp < MIN_SHARPNESS) {
+      setReason('Hold steady — too blurry');
+      return false;
+    }
 
-      capturingRef.current = true;
-      const cap = document.createElement('canvas');
-      cap.width = video.videoWidth;
-      cap.height = video.videoHeight;
-      cap.getContext('2d')!.drawImage(video, 0, 0);
+    capturingRef.current = true;
+    const cap = document.createElement('canvas');
+    cap.width = video.videoWidth;
+    cap.height = video.videoHeight;
+    cap.getContext('2d')!.drawImage(video, 0, 0);
 
-      // Project the whole frame into cube space at the pose it was shot from.
-      // With a compass that pose is the live orientation; without one, the
-      // target's nominal direction is the best estimate.
-      const pose = hasCompass ? aimRef.current : { yaw: t.yaw, pitch: t.pitch };
-      cube.project(cap, pose, CAMERA_HFOV_DEG);
+    // Project the whole frame into cube space at the current device orientation.
+    const pose = aimRef.current;
+    cube.project(cap, pose, CAMERA_HFOV_DEG);
 
-      setPaintedCount(cube.capturedCount());
-      triggerFlash();
-      setReason(null);
-      dwellStartRef.current = null;
-      setDwell(0);
+    // Update state
+    const newCoverage = cube.totalCoverage();
+    setCoverage(newCoverage);
+    acceptedCountRef.current++;
+    setAcceptedCount(acceptedCountRef.current);
+    lastCaptureAimRef.current = { ...pose };
+    lastCaptureTimeRef.current = performance.now();
 
-      // Advance to the next face that still needs coverage.
-      let next = faceIndex + 1;
-      while (next < FACE_TARGETS.length && cube.isCaptured(FACE_TARGETS[next].face)) next++;
-      targetIndexRef.current = next;
-      setTargetIndex(next);
+    triggerFlash();
+    setReason(null);
 
-      setTimeout(() => (capturingRef.current = false), 500);
-      return true;
-    },
-    [cube, hasCompass, triggerFlash],
-  );
+    // Check auto-complete
+    if (newCoverage >= AUTO_COMPLETE_COVERAGE) {
+      setAutoCompleted(true);
+    }
 
-  // ---- auto-capture loop (compass mode) ----------------------------------
+    setTimeout(() => (capturingRef.current = false), 150);
+    return true;
+  }, [cube, triggerFlash]);
+
+  // ---- continuous auto-capture loop (compass mode) -------------------------
   useEffect(() => {
-    if (!ready || !hasCompass || done || uploading) return;
+    if (!ready || !hasCompass || uploading) return;
+
     let raf = 0;
     const tick = () => {
-      const idx = targetIndexRef.current;
-      const t = FACE_TARGETS[idx];
-      if (t && !cube.isCaptured(t.face)) {
-        const err = aimError(aimRef.current, t);
-        setHint(directionHint(aimRef.current, t, TOLERANCE_DEG));
+      const now = performance.now();
+      const aim = aimRef.current;
+      const currentCoverage = cube.totalCoverage();
 
-        if (rotSpeedRef.current > MAX_ROTATION_DEG_PER_SEC) {
-          setReason('Slow down');
-          dwellStartRef.current = null;
-          setDwell(0);
-        } else if (err <= TOLERANCE_DEG) {
-          setReason((r) => (r === 'Slow down' ? null : r));
-          const now = performance.now();
-          if (dwellStartRef.current == null) dwellStartRef.current = now;
-          const held = now - dwellStartRef.current;
-          setDwell(Math.min(1, held / DWELL_MS));
-          if (held >= DWELL_MS) captureFace(idx);
+      // Stop capturing if we've reached the hard limit
+      if (currentCoverage >= HARD_LIMIT_COVERAGE) {
+        setHint('Room capture complete!');
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+
+      // Update the nudge hint periodically
+      const nudge = coverageHint(cube);
+      setHint(nudge);
+
+      // Check if conditions are right for a capture
+      const timeSinceLastCapture = now - lastCaptureTimeRef.current;
+      const rotSpeed = rotSpeedRef.current;
+
+      if (rotSpeed > MAX_ROTATION_DEG_PER_SEC) {
+        setReason('Slow down…');
+      } else if (timeSinceLastCapture > MIN_CAPTURE_INTERVAL_MS) {
+        // Check rotation since last accepted frame
+        const lastAim = lastCaptureAimRef.current;
+        let rotationSinceLast = Infinity; // first capture always accepted
+        if (lastAim) {
+          const dYaw = angleDelta(lastAim.yaw, aim.yaw);
+          const dPitch = aim.pitch - lastAim.pitch;
+          rotationSinceLast = Math.hypot(dYaw, dPitch);
+        }
+
+        if (rotationSinceLast >= MIN_ROTATION_SINCE_LAST) {
+          setReason(null);
+          captureFrame();
         } else {
-          setReason((r) => (r === 'Slow down' ? null : r));
-          dwellStartRef.current = null;
-          setDwell(0);
+          setReason(null); // stable but hasn't rotated enough — that's fine, no warning
         }
       }
+
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [ready, hasCompass, done, uploading, cube, captureFace]);
+  }, [ready, hasCompass, uploading, cube, captureFrame]);
 
-  // ---- drag to look around (no-compass fallback) -------------------------
+  // ---- drag to look around (no-compass fallback) ---------------------------
   const dragging = useRef(false);
   const last = useRef({ x: 0, y: 0 });
   const onPointerDown = (e: React.PointerEvent) => {
@@ -271,6 +286,15 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     );
   }
 
+  const coveragePct = Math.round(coverage * 100);
+  const statusText = uploading
+    ? 'Finalizing room…'
+    : done
+      ? 'Capture complete!'
+      : coveragePct > 0
+        ? 'Keep rotating slowly…'
+        : 'Start by looking around the room';
+
   const message = reason ?? hint;
 
   return (
@@ -290,34 +314,21 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
       <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
         <div
           className={`relative grid place-items-center overflow-hidden rounded-full border-4 transition-all ${
-            dwell > 0 ? 'border-green-400' : 'border-white/80'
+            acceptedCount > 0 ? 'border-green-400/80' : 'border-white/80'
           }`}
-          style={{ width: 190, height: 190 }}
+          style={{ width: 180, height: 180 }}
         >
           <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
-          {/* Dwell progress ring */}
-          {dwell > 0 && (
-            <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 36 36">
-              <path
-                fill="none"
-                stroke="rgba(74,222,128,0.95)"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeDasharray={`${dwell * 100}, 100`}
-                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-              />
-            </svg>
-          )}
         </div>
       </div>
 
       {/* Capture flash */}
       <div
-        className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-150"
-        style={{ opacity: flash ? 0.55 : 0 }}
+        className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100"
+        style={{ opacity: flash ? 0.45 : 0 }}
       />
 
-      {/* Top bar: cancel + progress */}
+      {/* Top bar: cancel + coverage % */}
       <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
         <button
           onClick={onCancel}
@@ -326,18 +337,16 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
         >
           ✕
         </button>
-        <span className="rounded-full bg-black/50 px-3 py-1 text-sm font-semibold text-white backdrop-blur-sm">
-          {paintedCount} of {FACE_TARGETS.length} faces
+        <span className="rounded-full bg-black/50 px-3 py-1 text-sm font-semibold text-white backdrop-blur-sm tabular-nums">
+          {coveragePct}% captured
         </span>
       </div>
 
       {/* Guidance */}
       <div className="absolute inset-x-0 bottom-0 space-y-3 bg-gradient-to-t from-black/85 to-transparent p-4">
-        {!done && (
-          <p className="text-center text-base font-semibold text-white">
-            {uploading ? 'Finalizing room…' : `Aim at the ${target.label}`}
-          </p>
-        )}
+        <p className="text-center text-base font-semibold text-white">
+          {statusText}
+        </p>
         {message && !done && !uploading && (
           <p
             className={`text-center text-sm font-medium ${
@@ -348,34 +357,39 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
           </p>
         )}
 
+        {/* Coverage progress bar */}
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/25">
           <div
-            className="h-full rounded-full bg-green-500 transition-[width]"
-            style={{ width: `${(paintedCount / FACE_TARGETS.length) * 100}%` }}
+            className="h-full rounded-full bg-green-500 transition-[width] duration-300"
+            style={{ width: `${coveragePct}%` }}
           />
         </div>
 
         <div className="flex gap-3">
           {!hasCompass && !done && (
             <button
-              onClick={() => captureFace(targetIndexRef.current)}
+              onClick={() => {
+                // For no-compass fallback: manually capture at the current look direction
+                aimRef.current = look.current;
+                captureFrame();
+              }}
               disabled={uploading}
               className="flex-1 rounded-xl border border-white/40 px-4 py-2.5 font-medium text-white disabled:opacity-40"
             >
-              Capture {target.label}
+              Capture here
             </button>
           )}
           <button
             onClick={finalize}
-            disabled={paintedCount < 1 || uploading}
+            disabled={acceptedCount < 1 || uploading}
             className="flex-1 rounded-xl bg-green-500 px-5 py-2.5 font-medium text-white disabled:opacity-40"
           >
-            {uploading ? 'Uploading…' : done ? 'Finish room' : `Finish (${paintedCount})`}
+            {uploading ? 'Uploading…' : done ? 'Finish room' : `Finish (${coveragePct}%)`}
           </button>
         </div>
         {!hasCompass && (
           <p className="text-center text-[11px] text-white/60">
-            No motion sensor — drag to look around the cube, and capture each wall in turn.
+            No motion sensor — drag to look around the cube, and capture each direction in turn.
           </p>
         )}
       </div>
