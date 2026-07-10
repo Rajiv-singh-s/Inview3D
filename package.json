@@ -1,0 +1,27 @@
+{
+  "name": "inview3d",
+  "version": "0.1.0",
+  "private": true,
+  "description": "InView3D — Convert an indoor walkthrough video into an interactive browser-based 3D environment using classical photogrammetry (COLMAP + OpenMVS).",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "build": "npm run build -w backend && npm run build -w frontend",
+    "start:backend": "npm run start:prod -w backend",
+    "start:frontend": "npm run start -w frontend",
+    "lint": "npm run lint -w backend && npm run lint -w frontend",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\"",
+    "prepare": "husky || true"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "prettier": "^3.4.2",
+    "husky": "^9.1.7"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

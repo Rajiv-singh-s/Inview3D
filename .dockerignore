@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+**/.next
+**/out
+uploads/*
+output/*
+!uploads/.gitkeep
+!output/.gitkeep
+.git
+*.log

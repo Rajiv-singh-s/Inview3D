@@ -1,0 +1,4 @@
+# Python dependencies for the GLB conversion step.
+trimesh==4.5.3
+numpy==1.26.4
+pillow==10.4.0
