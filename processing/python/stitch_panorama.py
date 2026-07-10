@@ -99,13 +99,31 @@ def estimate_cameras(images):
     for cam in cameras:
         cam.R = cam.R.astype(np.float32)
 
-    # Ray adjuster is the right cost function for pure-rotation panoramas.
-    adjuster = cv2.detail_BundleAdjusterRay()
-    adjuster.setConfThresh(1.0)
-    adjuster.setRefinementMask(np.ones((3, 3), np.uint8))
-    ok, cameras = adjuster.apply(features, matches, cameras)
-    if not ok:
-        raise RuntimeError("Camera refinement failed. " + OVERLAP_HINT)
+    # Ray adjuster is ideal for pure-rotation panoramas, but can fail on
+    # weak/ambiguous scenes. Fall back instead of aborting the whole capture.
+    refined = None
+
+    ray = cv2.detail_BundleAdjusterRay()
+    ray.setConfThresh(1.0)
+    ray.setRefinementMask(np.ones((3, 3), np.uint8))
+    ok, ray_cameras = ray.apply(features, matches, cameras)
+    if ok:
+        refined = ray_cameras
+    else:
+        sys.stderr.write("Warning: ray bundle adjustment failed; trying reprojection adjuster.\n")
+        reproj = cv2.detail_BundleAdjusterReproj()
+        reproj.setConfThresh(0.8)
+        reproj.setRefinementMask(np.ones((3, 3), np.uint8))
+        ok, reproj_cameras = reproj.apply(features, matches, cameras)
+        if ok:
+            refined = reproj_cameras
+        else:
+            sys.stderr.write(
+                "Warning: camera refinement failed; continuing with initial camera estimates.\n"
+            )
+
+    if refined is not None:
+        cameras = refined
 
     # Remove accumulated roll so the horizon stays level.
     rmats = [np.copy(cam.R) for cam in cameras]
