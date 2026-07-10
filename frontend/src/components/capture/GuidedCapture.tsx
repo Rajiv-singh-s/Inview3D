@@ -255,13 +255,6 @@ export function GuidedCapture({
 
     if (nextTargetIndex == null) return { dots: [], current: null };
 
-    const lookahead: number[] = [nextTargetIndex];
-    const nextStep = captureOrder.findIndex((idx) => idx === nextTargetIndex);
-    for (let k = 1; k <= 2; k++) {
-      const id = captureOrder[nextStep + k];
-      if (id != null && !taken[id]) lookahead.push(id);
-    }
-
     const visible: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }> = [];
 
     let currentTarget: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
@@ -288,8 +281,7 @@ export function GuidedCapture({
     const hScale = Math.tan((H_FOV / 2) * Math.PI / 180);
     const vScale = Math.tan((V_FOV / 2) * Math.PI / 180);
 
-    lookahead.forEach((index) => {
-      const t = targets[index];
+    targets.forEach((t, index) => {
       const tYawTrue = (base + t.yaw) % 360;
       const dYaw = angleDelta(orient.yaw, tYawTrue);
       const dPitch = t.pitch - orient.pitch;
@@ -466,7 +458,7 @@ export function GuidedCapture({
         {/* Guide frame */}
         <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/25" />
 
-        {/* Current target + short lookahead only (less visual noise). */}
+        {/* All target dots in view */}
         {dots.map((d) => (
           <div
             key={d.index}
@@ -476,18 +468,22 @@ export function GuidedCapture({
               top: `${d.y}%`,
               width: d.index === nextTargetIndex ? (d.dist <= TOLERANCE_DEG ? 40 : 28) : 18,
               height: d.index === nextTargetIndex ? (d.dist <= TOLERANCE_DEG ? 40 : 28) : 18,
-              backgroundColor: d.index === nextTargetIndex
-                ? (d.dist <= TOLERANCE_DEG
-                  ? 'rgba(34,197,94,0.3)'
-                  : 'transparent')
-                : 'rgba(255,255,255,0.18)',
-              border: d.index === nextTargetIndex
-                ? (d.dist <= TOLERANCE_DEG
-                  ? '3px solid rgba(255,255,255,0.95)'
-                  : '2px solid rgba(255,255,255,0.65)')
-                : '1px solid rgba(255,255,255,0.35)',
+              backgroundColor: d.isTaken
+                ? 'rgba(34,197,94,0.7)' // Solid green for captured
+                : d.index === nextTargetIndex
+                  ? (d.dist <= TOLERANCE_DEG
+                    ? 'rgba(34,197,94,0.3)'
+                    : 'transparent')
+                  : 'rgba(255,255,255,0.4)', // Solid white for uncaptured
+              border: d.isTaken
+                ? '2px solid rgba(34,197,94,0.9)'
+                : d.index === nextTargetIndex
+                  ? (d.dist <= TOLERANCE_DEG
+                    ? '3px solid rgba(255,255,255,0.95)'
+                    : '2px solid rgba(255,255,255,0.65)')
+                  : '1px solid rgba(255,255,255,0.7)',
               boxShadow:
-                d.index === nextTargetIndex && d.dist <= TOLERANCE_DEG
+                d.index === nextTargetIndex && d.dist <= TOLERANCE_DEG && !d.isTaken
                   ? '0 0 0 6px rgba(255,255,255,0.25)'
                   : 'none',
               transition: 'all 0.12s',
