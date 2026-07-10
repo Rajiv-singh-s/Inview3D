@@ -45,11 +45,16 @@ export default function CapturePage() {
     }
   };
 
-  const addShot = useCallback((shot: CapturedShot) => {
-    setShots((prev) => [...prev, shot]);
+  const addShot = useCallback((shot: CapturedShot | CapturedShot[]) => {
+    setShots((prev) => {
+      if (Array.isArray(shot)) {
+        return [...prev, ...shot];
+      }
+      return [...prev, shot];
+    });
   }, []);
 
-  const undo = useCallback(() => setShots((prev) => prev.slice(0, -1)), []);
+  const undo = useCallback(() => setShots((prev) => prev.slice(0, -3)), []);
 
   const finish = async () => {
     if (shots.length < 4) return;

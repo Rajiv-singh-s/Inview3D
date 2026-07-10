@@ -54,7 +54,7 @@ export interface CapturedShot {
 
 interface GuidedCaptureProps {
   shots: CapturedShot[];
-  onShot: (shot: CapturedShot) => void;
+  onShot: (shot: CapturedShot | CapturedShot[]) => void;
   onUndo: () => void;
   onFinish: () => void;
   onCancel: () => void;
@@ -84,7 +84,7 @@ export function GuidedCapture({
 
   const count = shots.length;
 
-  // Auto transition to review phase when done
+  // Auto transition to review phase when all 18 shots (6 faces * 3 slices) are captured
   useEffect(() => {
     if (count === TOTAL_SHOTS && capturePhase === 'capturing') {
       setCapturePhase('review');
@@ -198,36 +198,83 @@ export function GuidedCapture({
     setTimeout(() => setFlash(false), 120);
   }, []);
 
+  // ---- Capture Face & Automatically Crop Into 3 Equal Vertical Frames -----
   const takeManualShot = useCallback(() => {
     const video = videoRef.current;
     if (!video || capturingRef.current || video.videoWidth === 0 || count >= TOTAL_SHOTS) return;
 
     capturingRef.current = true;
-    const target = targets[count];
 
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d')?.drawImage(video, 0, 0);
-    
-    canvas.toBlob(
-      (blob) => {
-        if (blob) {
-          // Use perfect mathematical nominal pose for zero-defect projection warping
-          onShot({ 
-            blob, 
-            face: target.face, 
-            yaw: target.yaw, 
-            pitch: target.pitch 
-          });
-          triggerFlash();
-        }
-        setTimeout(() => (capturingRef.current = false), 300);
-      },
-      'image/jpeg',
-      0.92,
-    );
-  }, [count, targets, onShot, triggerFlash]);
+    // 6 Faces: Front, Right, Back, Left, Top, Bottom
+    const currentFaceIndex = Math.floor(count / 3);
+    const faces = ['front', 'right', 'back', 'left', 'top', 'bottom'];
+    const currentFace = faces[currentFaceIndex];
+
+    let nominalPitch = 0;
+    if (currentFace === 'top') nominalPitch = 75;
+    if (currentFace === 'bottom') nominalPitch = -75;
+
+    const w_full = video.videoWidth;
+    const h_full = video.videoHeight;
+    const w_panel = Math.floor(w_full / 3);
+
+    // Extract a vertical slice from the video canvas
+    const extractSlice = (xStart: number): Promise<Blob | null> => {
+      const canvas = document.createElement('canvas');
+      canvas.width = w_panel;
+      canvas.height = h_full;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return Promise.resolve(null);
+
+      // Slice the input frame vertically
+      ctx.drawImage(
+        video,
+        xStart, 0, w_panel, h_full, // Source region
+        0, 0, w_panel, h_full       // Target region
+      );
+
+      return new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.92);
+      });
+    };
+
+    // Crop Left, Middle, and Right sections of the single snapshot simultaneously
+    Promise.all([
+      extractSlice(0),             // Left 1/3 panel
+      extractSlice(w_panel),       // Middle 1/3 panel
+      extractSlice(2 * w_panel)    // Right 1/3 panel
+    ]).then(([leftBlob, middleBlob, rightBlob]) => {
+      if (leftBlob && middleBlob && rightBlob) {
+        let baseYaw = 0;
+        if (currentFace === 'front') baseYaw = 0;
+        else if (currentFace === 'right') baseYaw = 90;
+        else if (currentFace === 'back') baseYaw = 180;
+        else if (currentFace === 'left') baseYaw = -90;
+        else if (currentFace === 'top') baseYaw = 0;
+        else if (currentFace === 'bottom') baseYaw = 0;
+
+        const leftYaw = baseYaw - 20;
+        const middleYaw = baseYaw;
+        const rightYaw = baseYaw + 20;
+
+        const newShots: CapturedShot[] = [
+          { blob: leftBlob, face: currentFace, yaw: leftYaw, pitch: nominalPitch },
+          { blob: middleBlob, face: currentFace, yaw: middleYaw, pitch: nominalPitch },
+          { blob: rightBlob, face: currentFace, yaw: rightYaw, pitch: nominalPitch }
+        ];
+
+        onShot(newShots);
+        triggerFlash();
+      }
+      setTimeout(() => {
+        capturingRef.current = false;
+      }, 400);
+    }).catch((err) => {
+      console.error(err);
+      capturingRef.current = false;
+    });
+
+  }, [count, onShot, triggerFlash]);
 
   const imageUrls = useMemo(() => shots.map((s) => URL.createObjectURL(s.blob)), [shots]);
 
@@ -237,30 +284,30 @@ export function GuidedCapture({
 
   // ---- Get Current Instruction Text ---------------------------------------
   const guidance = useMemo(() => {
-    if (count >= TOTAL_SHOTS) return { step: 'Finished', text: 'All shots captured! Proceed to stitch.' };
-    const t = targets[count];
-    const faceName = t.face.toUpperCase();
+    const currentFaceIndex = Math.floor(count / 3);
+    const faces = ['FRONT', 'RIGHT', 'BACK', 'LEFT', 'CEILING', 'FLOOR'];
+    
+    if (currentFaceIndex >= 6) {
+      return { step: 'Finished', text: 'All faces captured! Proceed to stitch.' };
+    }
+    
+    const faceName = faces[currentFaceIndex];
     
     let turnHint = '';
-    if (count === 0) turnHint = 'Start facing the center of the FRONT wall.';
-    else if (count === 3) turnHint = 'Turn 90° to the RIGHT wall.';
-    else if (count === 6) turnHint = 'Turn 90° to the BACK wall.';
-    else if (count === 9) turnHint = 'Turn 90° to the LEFT wall.';
-    else if (count === 12) turnHint = 'Tilt your phone UP 75° to the CEILING.';
-    else if (count === 15) turnHint = 'Tilt your phone DOWN 75° to the FLOOR.';
-
-    let targetHint = '';
-    if (count % 3 === 0) targetHint = 'Align with the LEFT column dot (Left Overlap).';
-    else if (count % 3 === 1) targetHint = 'Align with the CENTER column dot (Face Center).';
-    else if (count % 3 === 2) targetHint = 'Align with the RIGHT column dot (Right Overlap).';
+    if (currentFaceIndex === 0) turnHint = 'Aim directly at the center of the FRONT wall.';
+    else if (currentFaceIndex === 1) turnHint = 'Turn 90° right, aim at the center of the RIGHT wall.';
+    else if (currentFaceIndex === 2) turnHint = 'Turn 90° right, aim at the center of the BACK wall.';
+    else if (currentFaceIndex === 3) turnHint = 'Turn 90° right, aim at the center of the LEFT wall.';
+    else if (currentFaceIndex === 4) turnHint = 'Tilt phone UP 75°, aim at the center of the CEILING.';
+    else if (currentFaceIndex === 5) turnHint = 'Tilt phone DOWN 75°, aim at the center of the FLOOR.';
 
     return {
       face: faceName,
-      step: `Shot ${count + 1} of ${TOTAL_SHOTS}`,
+      step: `Face ${currentFaceIndex + 1} of 6`,
       turn: turnHint,
-      target: targetHint,
+      target: 'Align and press the capture button. The app will automatically split it into 3 equal panels.',
     };
-  }, [count, targets]);
+  }, [count]);
 
   // ========================================================================
   //  PORTRAIT ENFORCEMENT
@@ -333,8 +380,6 @@ export function GuidedCapture({
   // ========================================================================
   //  CAPTURE PHASE
   // ========================================================================
-  const activeDotIndex = count % 3;
-
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
       <video ref={videoRef} playsInline muted className="h-[85vh] w-full bg-black object-cover" />
@@ -351,12 +396,12 @@ export function GuidedCapture({
         {/* Visual guide layout (matches user hand-drawn diagram) */}
         <div className="absolute inset-0">
           {/* Vertical Column Lines */}
-          <div className="absolute left-[33.33%] top-0 bottom-0 border-l border-white/20 border-dashed" />
-          <div className="absolute left-[66.66%] top-0 bottom-0 border-l border-white/20 border-dashed" />
+          <div className="absolute left-[33.33%] top-0 bottom-0 border-l border-white/25 border-dashed" />
+          <div className="absolute left-[66.66%] top-0 bottom-0 border-l border-white/25 border-dashed" />
           
           {/* Horizontal Bounds */}
-          <div className="absolute top-[18%] left-0 right-0 border-t border-white/20 border-dashed" />
-          <div className="absolute bottom-[18%] left-0 right-0 border-t border-white/20 border-dashed" />
+          <div className="absolute top-[18%] left-0 right-0 border-t border-white/25 border-dashed" />
+          <div className="absolute bottom-[18%] left-0 right-0 border-t border-white/25 border-dashed" />
 
           {/* Boundaries labels */}
           <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold tracking-widest text-white/30">UP / CEILING</div>
@@ -368,7 +413,6 @@ export function GuidedCapture({
         {/* Static targets: Left, Center, Right dots */}
         <div className="absolute inset-0 flex justify-between items-center px-[10%]">
           {[0, 1, 2].map((idx) => {
-            const isActive = activeDotIndex === idx;
             const label = idx === 0 ? 'LEFT' : idx === 1 ? 'CENTER' : 'RIGHT';
             return (
               <div 
@@ -379,17 +423,9 @@ export function GuidedCapture({
                 }}
               >
                 <div
-                  className={`rounded-full transition-all duration-300 ${
-                    isActive 
-                      ? 'w-10 h-10 bg-green-500 border-4 border-white shadow-[0_0_15px_rgba(34,197,94,0.8)] scale-110' 
-                      : 'w-7 h-7 bg-white/30 border-2 border-white/20 scale-100'
-                  }`}
+                  className="w-10 h-10 bg-green-500 border-4 border-white shadow-[0_0_15px_rgba(34,197,94,0.8)] animate-pulse rounded-full"
                 />
-                <span 
-                  className={`text-[9px] font-bold tracking-wider ${
-                    isActive ? 'text-green-400' : 'text-white/40'
-                  }`}
-                >
+                <span className="text-[9px] font-bold tracking-wider text-green-400">
                   {label}
                 </span>
               </div>
@@ -405,7 +441,7 @@ export function GuidedCapture({
             <div className="mt-1.5 text-sm font-semibold text-white leading-tight animate-pulse">{guidance.turn}</div>
           )}
           {guidance.target && (
-            <div className="mt-1 text-xs text-slate-300">{guidance.target}</div>
+            <div className="mt-1 text-[11px] text-slate-300 leading-normal">{guidance.target}</div>
           )}
         </div>
       </div>
@@ -459,10 +495,10 @@ export function GuidedCapture({
           
           <button
             onClick={() => setCapturePhase('review')}
-            disabled={count < 4 || busy}
+            disabled={count < 3 || busy}
             className="flex-1 rounded-xl bg-slate-800/80 border border-slate-700/50 py-3 font-semibold text-slate-300 disabled:opacity-40 disabled:pointer-events-none active:bg-slate-700 text-xs"
           >
-            Finish Early ({count})
+            Review ({count})
           </button>
 
           {/* Center main shutter button */}
@@ -470,10 +506,10 @@ export function GuidedCapture({
             <button
               onClick={takeManualShot}
               disabled={busy || count >= TOTAL_SHOTS}
-              className="w-16 h-16 rounded-full bg-white border-4 border-slate-800 shadow-2xl flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform"
+              className="w-16 h-16 rounded-full bg-white border-4 border-slate-800 shadow-2xl flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform pointer-events-auto"
               aria-label="Capture Photo"
             >
-              <div className="w-12 h-12 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center pointer-events-none">
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
