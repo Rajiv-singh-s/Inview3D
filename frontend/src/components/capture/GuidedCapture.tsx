@@ -38,10 +38,12 @@ function buildTargets(): Target[] {
 export const TOTAL_SHOTS = buildTargets().length;
 
 /** How close (degrees) the reticle must be to a target to auto-capture it. */
-const TOLERANCE_DEG = 8;
+const TOLERANCE_DEG = 6;
+/** Must remain aligned for this long before auto-capture fires. */
+const CAPTURE_DWELL_MS = 220;
 /** Half-angles of the on-screen guidance viewport. */
-const H_FOV = 60;
-const V_FOV = 45;
+const H_FOV = 52;
+const V_FOV = 40;
 
 export interface CapturedShot {
   blob: Blob;
@@ -52,6 +54,22 @@ export interface CapturedShot {
 /** Smallest signed angle from `a` to `b`, in (-180, 180]. */
 function angleDelta(a: number, b: number): number {
   return ((((b - a) % 360) + 540) % 360) - 180;
+}
+
+/** Build a smooth sweep order (alternating yaw direction per ring). */
+function buildCaptureOrder(targets: Target[]): number[] {
+  const ringOrder = [0, 30, 60, 90, -30, -60, -90];
+  const out: number[] = [];
+  ringOrder.forEach((pitch, ringIdx) => {
+    const ids = targets
+      .map((t, i) => ({ t, i }))
+      .filter((x) => x.t.pitch === pitch)
+      .sort((a, b) => a.t.yaw - b.t.yaw)
+      .map((x) => x.i);
+    if (ringIdx % 2 === 1) ids.reverse();
+    out.push(...ids);
+  });
+  return out;
 }
 
 interface GuidedCaptureProps {
@@ -86,11 +104,14 @@ export function GuidedCapture({
   const baseYawRef = useRef<number | null>(null);
   /** Maps shot index -> target index, so undo can un-mark the correct target. */
   const capturedOrderRef = useRef<number[]>([]);
+  /** When alignment with the current target started (for dwell capture). */
+  const alignedSinceRef = useRef<number | null>(null);
   /** Ref mirror of shots.length so async callbacks always read the current value. */
   const shotsLengthRef = useRef(0);
   shotsLengthRef.current = shots.length;
 
   const targets = useMemo(buildTargets, []);
+  const captureOrder = useMemo(() => buildCaptureOrder(targets), [targets]);
 
   /** Which targets have been captured, derived from capturedOrder & shots.length. */
   const taken = useMemo(() => {
@@ -188,6 +209,7 @@ export function GuidedCapture({
             capturedOrderRef.current = [...capturedOrderRef.current.slice(0, shotIndex), targetIndex];
             onShot({ blob, yaw: orient?.yaw ?? 0, pitch: orient?.pitch ?? 0 });
             triggerFlash();
+            alignedSinceRef.current = null;
           }
           setTimeout(() => (capturingRef.current = false), 400);
         },
@@ -205,26 +227,37 @@ export function GuidedCapture({
     takeShot(idx);
   }, [targets, taken, takeShot]);
 
-  /** Screen-projected positions of remaining targets visible in the current viewport. */
-  const { dots, nearest } = useMemo((): {
+  const nextTargetIndex = useMemo(() => {
+    const nextStep = captureOrder.findIndex((idx) => !taken[idx]);
+    return nextStep >= 0 ? captureOrder[nextStep] : null;
+  }, [captureOrder, taken]);
+
+  /** Screen-projected positions for the current target and a few upcoming hints. */
+  const { dots, current } = useMemo((): {
     dots: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }>;
-    nearest: { index: number; dist: number; dYaw: number; dPitch: number } | null;
+    current: { index: number; dist: number; dYaw: number; dPitch: number } | null;
   } => {
-    if (!orient || baseYawRef.current == null) return { dots: [], nearest: null };
+    if (!orient || baseYawRef.current == null) return { dots: [], current: null };
     const base = baseYawRef.current;
 
-    let best: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
+    if (nextTargetIndex == null) return { dots: [], current: null };
+
+    const lookahead: number[] = [nextTargetIndex];
+    const nextStep = captureOrder.findIndex((idx) => idx === nextTargetIndex);
+    for (let k = 1; k <= 2; k++) {
+      const id = captureOrder[nextStep + k];
+      if (id != null && !taken[id]) lookahead.push(id);
+    }
+
     const visible: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }> = [];
 
-    targets.forEach((t, index) => {
+    let currentTarget: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
+    lookahead.forEach((index) => {
+      const t = targets[index];
       const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
       const dPitch = t.pitch - orient.pitch;
       const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
-
-      // Track nearest untaken target for guidance.
-      if (!taken[index] && (!best || dist < best.dist)) {
-        best = { index, dist, dYaw, dPitch };
-      }
+      if (index === nextTargetIndex) currentTarget = { index, dist, dYaw, dPitch };
 
       // Only project targets that fall within the visible frustum.
       if (Math.abs(dYaw) <= H_FOV && Math.abs(dPitch) <= V_FOV) {
@@ -238,14 +271,21 @@ export function GuidedCapture({
       }
     });
 
-    return { dots: visible, nearest: best };
-  }, [orient, targets, taken]);
+    return { dots: visible, current: currentTarget };
+  }, [orient, targets, taken, captureOrder, nextTargetIndex]);
 
-  // Auto-capture: fire when the reticle aligns with the nearest untaken target.
+  // Auto-capture: fire only on the current ordered target after brief stable alignment.
   useEffect(() => {
     if (!ready || busy || done || !hasCompass) return;
-    if (nearest && nearest.dist <= TOLERANCE_DEG) takeShot(nearest.index);
-  }, [ready, busy, done, hasCompass, nearest, takeShot]);
+    if (!current) return;
+    const now = Date.now();
+    if (current.dist <= TOLERANCE_DEG) {
+      if (alignedSinceRef.current == null) alignedSinceRef.current = now;
+      if (now - alignedSinceRef.current >= CAPTURE_DWELL_MS) takeShot(current.index);
+    } else {
+      alignedSinceRef.current = null;
+    }
+  }, [ready, busy, done, hasCompass, current, takeShot]);
 
   if (error) {
     return (
@@ -259,17 +299,17 @@ export function GuidedCapture({
     );
   }
 
-  const aligned = nearest != null && nearest.dist <= TOLERANCE_DEG;
+  const aligned = current != null && current.dist <= TOLERANCE_DEG;
   const hint =
-    nearest == null
+    current == null
       ? null
-      : Math.abs(nearest.dYaw) > Math.abs(nearest.dPitch)
-        ? nearest.dYaw > 0
-          ? 'Turn right â†’'
-          : 'â† Turn left'
-        : nearest.dPitch > 0
-          ? 'Tilt up â†‘'
-          : 'Tilt down â†“';
+      : Math.abs(current.dYaw) > Math.abs(current.dPitch)
+        ? current.dYaw > 0
+          ? 'Turn right >'
+          : '< Turn left'
+        : current.dPitch > 0
+          ? 'Tilt up ^'
+          : 'Tilt down v';
 
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
@@ -287,7 +327,7 @@ export function GuidedCapture({
         {/* Guide frame */}
         <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/25" />
 
-        {/* All targets visible in the current viewport */}
+        {/* Current target + short lookahead only (less visual noise). */}
         {dots.map((d) => (
           <div
             key={d.index}
@@ -295,19 +335,22 @@ export function GuidedCapture({
             style={{
               left: `${d.x}%`,
               top: `${d.y}%`,
-              width: d.isTaken ? 18 : d.dist <= TOLERANCE_DEG ? 38 : 24,
-              height: d.isTaken ? 18 : d.dist <= TOLERANCE_DEG ? 38 : 24,
-              backgroundColor: d.isTaken
-                ? 'rgba(34,197,94,0.9)'
-                : d.dist <= TOLERANCE_DEG
+              width: d.index === nextTargetIndex ? (d.dist <= TOLERANCE_DEG ? 40 : 28) : 18,
+              height: d.index === nextTargetIndex ? (d.dist <= TOLERANCE_DEG ? 40 : 28) : 18,
+              backgroundColor: d.index === nextTargetIndex
+                ? (d.dist <= TOLERANCE_DEG
                   ? 'rgba(34,197,94,0.3)'
-                  : 'transparent',
-              border: d.isTaken
-                ? 'none'
-                : d.dist <= TOLERANCE_DEG
+                  : 'transparent')
+                : 'rgba(255,255,255,0.18)',
+              border: d.index === nextTargetIndex
+                ? (d.dist <= TOLERANCE_DEG
                   ? '3px solid rgba(255,255,255,0.95)'
-                  : '2px solid rgba(255,255,255,0.55)',
-              boxShadow: d.dist <= TOLERANCE_DEG && !d.isTaken ? '0 0 0 6px rgba(255,255,255,0.25)' : 'none',
+                  : '2px solid rgba(255,255,255,0.65)')
+                : '1px solid rgba(255,255,255,0.35)',
+              boxShadow:
+                d.index === nextTargetIndex && d.dist <= TOLERANCE_DEG
+                  ? '0 0 0 6px rgba(255,255,255,0.25)'
+                  : 'none',
               transition: 'all 0.12s',
             }}
           />
@@ -342,14 +385,14 @@ export function GuidedCapture({
           className="grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-900 disabled:opacity-40"
           aria-label="Undo last shot"
         >
-          â†º
+          U
         </button>
         <button
           onClick={onCancel}
           className="grid h-9 w-9 place-items-center rounded-full bg-red-500 text-white"
           aria-label="Cancel capture"
         >
-          âœ•
+          X
         </button>
       </div>
 
@@ -367,7 +410,7 @@ export function GuidedCapture({
             />
           </div>
           <span className="min-w-[4ch] text-right text-sm font-medium tabular-nums text-white">
-            {count}Â /Â {TOTAL_SHOTS}
+            {count}/{TOTAL_SHOTS}
           </span>
         </div>
 
@@ -387,13 +430,13 @@ export function GuidedCapture({
             disabled={count < 4 || busy}
             className="flex-1 rounded-xl bg-green-500 px-5 py-2.5 font-medium text-white disabled:opacity-40"
           >
-            {busy ? 'Uploadingâ€¦' : done ? 'Finish' : `Finish early (${count})`}
+            {busy ? 'Uploading...' : done ? 'Finish' : `Finish early (${count})`}
           </button>
         </div>
 
         {!hasCompass && (
           <p className="text-center text-[11px] text-white/60">
-            No compass â€” rotate a little between shots, keeping â‰ˆ50% overlap.
+            No compass - rotate a little between shots, keeping about 50% overlap.
           </p>
         )}
       </div>
@@ -412,7 +455,7 @@ interface SphereMinimap {
 }
 
 /** Small SVG grid showing all capture positions coloured by capture state. */
-function SphereMinimap({ rings, targets, taken }: SphereMinimap) {
+function SphereMinimap({ rings, targets: _targets, taken }: SphereMinimap) {
   // Build a lookup: targetIndex -> taken
   const takenSet = useMemo(() => {
     const s = new Set<number>();
