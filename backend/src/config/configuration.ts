@@ -39,7 +39,7 @@ function resolvePath(value: string | undefined, fallback: string): string {
 
 export default (): { app: AppConfig } => {
   const repoRoot = path.resolve(process.cwd(), '..');
-  const defaultScripts = path.join(repoRoot, 'processing', 'scripts');
+  const defaultScripts = path.join(repoRoot, 'processing', 'python');
 
   return {
     app: {

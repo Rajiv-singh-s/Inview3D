@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -8,11 +8,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
  */
 const RINGS: Array<{ pitch: number; count: number }> = [
   { pitch: 90, count: 1 },
-  { pitch: 60, count: 6 },
-  { pitch: 30, count: 8 },
-  { pitch: 0, count: 12 },
-  { pitch: -30, count: 8 },
-  { pitch: -60, count: 6 },
+  { pitch: 45, count: 4 },
+  { pitch: 0, count: 6 },
+  { pitch: -45, count: 4 },
   { pitch: -90, count: 1 },
 ];
 
@@ -58,7 +56,7 @@ function angleDelta(a: number, b: number): number {
 
 /** Build a smooth sweep order (alternating yaw direction per ring). */
 function buildCaptureOrder(targets: Target[]): number[] {
-  const ringOrder = [0, 30, 60, 90, -30, -60, -90];
+  const ringOrder = [0, 45, 90, -45, -90];
   const out: number[] = [];
   ringOrder.forEach((pitch, ringIdx) => {
     const ids = targets
@@ -84,10 +82,7 @@ interface GuidedCaptureProps {
 /**
  * Guided spherical photo capture. The user stands still and sweeps the phone
  * across the sphere; each target is shot automatically when the reticle reaches
- * it. A minimap shows overall sphere coverage at all times.
- *
- * Undo is fully tracked: `capturedOrder[i]` records which target index was
- * taken for shot `i`, so trimming `shots` via undo correctly un-marks targets.
+ * it.
  */
 export function GuidedCapture({
   shots,
@@ -128,12 +123,23 @@ export function GuidedCapture({
   const [ready, setReady] = useState(false);
   /** Flash overlay when a shot is auto-captured. */
   const [flash, setFlash] = useState(false);
+  const [dwellProgress, setDwellProgress] = useState(0);
+  const [capturePhase, setCapturePhase] = useState<'capturing' | 'review'>('capturing');
+  const [isPrivate, setIsPrivate] = useState(false);
 
   const count = shots.length;
   const done = taken.every(Boolean);
 
+  // Auto transition to review when all 16 shots are captured
+  useEffect(() => {
+    if (count === TOTAL_SHOTS && capturePhase === 'capturing') {
+      setCapturePhase('review');
+    }
+  }, [count, capturePhase]);
+
   // ---- camera ------------------------------------------------------------
   useEffect(() => {
+    if (capturePhase !== 'capturing') return;
     let cancelled = false;
     (async () => {
       try {
@@ -162,10 +168,11 @@ export function GuidedCapture({
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
-  }, []);
+  }, [capturePhase]);
 
   // ---- orientation -------------------------------------------------------
   useEffect(() => {
+    if (capturePhase !== 'capturing') return;
     const onOrientation = (e: DeviceOrientationEvent) => {
       const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number })
         .webkitCompassHeading;
@@ -173,15 +180,13 @@ export function GuidedCapture({
       if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return;
       setHasCompass(true);
       const yaw = ((yawRaw % 360) + 360) % 360;
-      // beta is ~90 when the phone is upright; subtract to get pitch from horizon.
       const pitch = Math.max(-90, Math.min(90, e.beta - 90));
       setOrient({ yaw, pitch });
-      // Anchor base yaw on the very first orientation event.
       if (baseYawRef.current == null) baseYawRef.current = yaw;
     };
     window.addEventListener('deviceorientation', onOrientation, true);
     return () => window.removeEventListener('deviceorientation', onOrientation, true);
-  }, []);
+  }, [capturePhase]);
 
   const triggerFlash = useCallback(() => {
     setFlash(true);
@@ -194,8 +199,6 @@ export function GuidedCapture({
       if (!video || capturingRef.current || video.videoWidth === 0) return;
       capturingRef.current = true;
 
-      // Snapshot insertion slot before async blob encode. If undo fires during
-      // encoding this ensures the new shot overwrites the correct position.
       const shotIndex = shotsLengthRef.current;
 
       const canvas = document.createElement('canvas');
@@ -205,11 +208,11 @@ export function GuidedCapture({
       canvas.toBlob(
         (blob) => {
           if (blob) {
-            // Write at shotIndex, overwriting any stale entry from a previous undo.
             capturedOrderRef.current = [...capturedOrderRef.current.slice(0, shotIndex), targetIndex];
             onShot({ blob, yaw: orient?.yaw ?? 0, pitch: orient?.pitch ?? 0 });
             triggerFlash();
             alignedSinceRef.current = null;
+            setDwellProgress(0);
           }
           setTimeout(() => (capturingRef.current = false), 400);
         },
@@ -259,7 +262,6 @@ export function GuidedCapture({
       const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
       if (index === nextTargetIndex) currentTarget = { index, dist, dYaw, dPitch };
 
-      // Only project targets that fall within the visible frustum.
       if (Math.abs(dYaw) <= H_FOV && Math.abs(dPitch) <= V_FOV) {
         visible.push({
           index,
@@ -276,16 +278,120 @@ export function GuidedCapture({
 
   // Auto-capture: fire only on the current ordered target after brief stable alignment.
   useEffect(() => {
-    if (!ready || busy || done || !hasCompass) return;
+    if (!ready || busy || done || !hasCompass || capturePhase !== 'capturing') return;
     if (!current) return;
-    const now = Date.now();
-    if (current.dist <= TOLERANCE_DEG) {
-      if (alignedSinceRef.current == null) alignedSinceRef.current = now;
-      if (now - alignedSinceRef.current >= CAPTURE_DWELL_MS) takeShot(current.index);
-    } else {
-      alignedSinceRef.current = null;
-    }
-  }, [ready, busy, done, hasCompass, current, takeShot]);
+
+    let animFrame: number;
+    const updateProgress = () => {
+      if (current.dist <= TOLERANCE_DEG) {
+        const now = Date.now();
+        if (alignedSinceRef.current == null) {
+          alignedSinceRef.current = now;
+        }
+        const elapsed = now - alignedSinceRef.current;
+        const progress = Math.min(1, elapsed / CAPTURE_DWELL_MS);
+        setDwellProgress(progress);
+        if (elapsed >= CAPTURE_DWELL_MS) {
+          takeShot(current.index);
+          return;
+        }
+        animFrame = requestAnimationFrame(updateProgress);
+      } else {
+        alignedSinceRef.current = null;
+        setDwellProgress(0);
+      }
+    };
+
+    updateProgress();
+    return () => cancelAnimationFrame(animFrame);
+  }, [ready, busy, done, hasCompass, current, takeShot, capturePhase]);
+
+  // Clean object URLs for images on unmount or review phase exit
+  const imageUrls = useMemo(() => {
+    return shots.map((s) => URL.createObjectURL(s.blob));
+  }, [shots]);
+
+  useEffect(() => {
+    return () => {
+      imageUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [imageUrls]);
+
+  if (capturePhase === 'review') {
+    return (
+      <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-slate-950 p-4 border border-slate-800 text-white min-h-[75vh] flex flex-col justify-between">
+        <div className="space-y-6 overflow-y-auto max-h-[62vh] pr-1">
+          <div>
+            <h2 className="text-xl font-bold">Source images ({count})</h2>
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              {imageUrls.map((url, idx) => (
+                <div key={idx} className="relative aspect-square overflow-hidden rounded-lg border border-slate-800 bg-slate-900">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={url} alt={`Captured ${idx}`} className="h-full w-full object-cover" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-4 border-t border-slate-800 pt-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Details</h3>
+            
+            {/* Private Toggle Switch */}
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-semibold text-sm">Private</p>
+                <p className="text-xs text-slate-500 mt-0.5">If enabled, your asset will be hidden from the explore page.</p>
+              </div>
+              <button
+                onClick={() => setIsPrivate(!isPrivate)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none ${
+                  isPrivate ? 'bg-green-500' : 'bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-200 ${
+                    isPrivate ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Location Component */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-blue-400">📍</span>
+                <span className="font-medium">Taketomi, Japan 🇯🇵</span>
+              </div>
+              <div className="h-24 w-full rounded-xl bg-slate-900 border border-slate-800 overflow-hidden relative flex items-center justify-center">
+                <div className="absolute inset-0 bg-blue-900/10 flex flex-col items-center justify-center text-xs text-slate-500">
+                  <span>Map Preview</span>
+                  <span className="mt-1 text-[10px]">24.329° N, 124.088° E</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer controls */}
+        <div className="border-t border-slate-800 pt-4 space-y-2">
+          <button
+            onClick={onFinish}
+            disabled={busy}
+            className="w-full rounded-xl bg-green-500 py-3 font-semibold text-white active:bg-green-600 disabled:opacity-40"
+          >
+            {busy ? 'Stitching...' : 'Stitch and post'}
+          </button>
+          <button
+            onClick={() => setCapturePhase('capturing')}
+            disabled={busy}
+            className="w-full text-center py-2 text-sm text-slate-400 hover:text-white"
+          >
+            Not now
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (
@@ -300,16 +406,6 @@ export function GuidedCapture({
   }
 
   const aligned = current != null && current.dist <= TOLERANCE_DEG;
-  const hint =
-    current == null
-      ? null
-      : Math.abs(current.dYaw) > Math.abs(current.dPitch)
-        ? current.dYaw > 0
-          ? 'Turn right >'
-          : '< Turn left'
-        : current.dPitch > 0
-          ? 'Tilt up ^'
-          : 'Tilt down v';
 
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
@@ -359,22 +455,29 @@ export function GuidedCapture({
         {/* Centre reticle */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           <div
-            className={`grid h-16 w-16 place-items-center rounded-full border-4 transition-all duration-150 ${
+            className={`relative grid h-16 w-16 place-items-center rounded-full border-4 transition-all duration-150 ${
               aligned
-                ? 'scale-110 border-white bg-green-500/60'
+                ? 'scale-110 border-white bg-green-500/20'
                 : 'border-white/70 bg-transparent'
             }`}
           >
+            {aligned && (
+              <svg className="absolute inset-0 -rotate-90 h-full w-full p-1" viewBox="0 0 36 36">
+                <path
+                  className="text-green-500"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  strokeDasharray={`${dwellProgress * 100}, 100`}
+                  d="M18 2.0845
+                    a 15.9155 15.9155 0 0 1 0 31.831
+                    a 15.9155 15.9155 0 0 1 0 -31.831"
+                />
+              </svg>
+            )}
             {!hasCompass && <span className="text-[10px] font-semibold text-white">TAP</span>}
           </div>
         </div>
-
-        {/* Directional hint */}
-        {hasCompass && hint && !aligned && (
-          <div className="absolute left-1/2 top-[62%] -translate-x-1/2 rounded-full bg-black/60 px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm">
-            {hint}
-          </div>
-        )}
       </div>
 
       {/* Top controls */}
@@ -398,8 +501,9 @@ export function GuidedCapture({
 
       {/* Bottom panel */}
       <div className="absolute inset-x-0 bottom-0 space-y-2 bg-gradient-to-t from-black/90 to-transparent p-4 pt-6">
-        {/* Sphere minimap */}
-        <SphereMinimap rings={RINGS} targets={targets} taken={taken} />
+        <p className="text-center text-xs text-white/80 font-medium px-4">
+          Shoot all photos from the same spot as your initial photo to ensure an optimal result.
+        </p>
 
         {/* Progress bar */}
         <div className="flex items-center gap-3">
@@ -409,8 +513,8 @@ export function GuidedCapture({
               style={{ width: `${(count / TOTAL_SHOTS) * 100}%` }}
             />
           </div>
-          <span className="min-w-[4ch] text-right text-sm font-medium tabular-nums text-white">
-            {count}/{TOTAL_SHOTS}
+          <span className="min-w-[5ch] text-right text-xs font-semibold tabular-nums text-white">
+            {count} of {TOTAL_SHOTS}
           </span>
         </div>
 
@@ -426,76 +530,14 @@ export function GuidedCapture({
             </button>
           )}
           <button
-            onClick={onFinish}
+            onClick={() => setCapturePhase('review')}
             disabled={count < 4 || busy}
             className="flex-1 rounded-xl bg-green-500 px-5 py-2.5 font-medium text-white disabled:opacity-40"
           >
-            {busy ? 'Uploading...' : done ? 'Finish' : `Finish early (${count})`}
+            Finish early ({count})
           </button>
         </div>
-
-        {!hasCompass && (
-          <p className="text-center text-[11px] text-white/60">
-            No compass - rotate a little between shots, keeping about 50% overlap.
-          </p>
-        )}
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Sphere minimap
-// ---------------------------------------------------------------------------
-
-interface SphereMinimap {
-  rings: typeof RINGS;
-  targets: Target[];
-  taken: boolean[];
-}
-
-/** Small SVG grid showing all capture positions coloured by capture state. */
-function SphereMinimap({ rings, targets: _targets, taken }: SphereMinimap) {
-  // Build a lookup: targetIndex -> taken
-  const takenSet = useMemo(() => {
-    const s = new Set<number>();
-    taken.forEach((t, i) => { if (t) s.add(i); });
-    return s;
-  }, [taken]);
-
-  // Assign target indices to rings in the same order as buildTargets()
-  const ringGroups: Array<{ ring: (typeof RINGS)[0]; indices: number[] }> = useMemo(() => {
-    let cursor = 0;
-    return rings.map((ring) => {
-      const count = ring.count;
-      const indices = Array.from({ length: count }, (_, j) => cursor + j);
-      cursor += count;
-      return { ring, indices };
-    });
-  }, [rings]);
-
-  return (
-    <div className="flex flex-col items-center gap-[3px] pb-1">
-      {ringGroups.map(({ ring, indices }) => (
-        <div key={ring.pitch} className="flex items-center gap-[3px]">
-          {indices.map((idx) => (
-            <div
-              key={idx}
-              className="rounded-full transition-colors duration-200"
-              style={{
-                width: 8,
-                height: 8,
-                backgroundColor: takenSet.has(idx)
-                  ? 'rgba(34,197,94,0.9)'
-                  : 'transparent',
-                border: takenSet.has(idx)
-                  ? 'none'
-                  : '1.5px solid rgba(255,255,255,0.45)',
-              }}
-            />
-          ))}
-        </div>
-      ))}
     </div>
   );
 }

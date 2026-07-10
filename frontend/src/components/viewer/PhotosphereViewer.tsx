@@ -31,7 +31,15 @@ function Sphere({ url }: { url: string }) {
   );
 }
 
-function CameraRig({ look, fov }: { look: React.RefObject<Look>; fov: React.MutableRefObject<number> }) {
+function CameraRig({
+  look,
+  fov,
+  joystick,
+}: {
+  look: React.RefObject<Look>;
+  fov: React.MutableRefObject<number>;
+  joystick: React.RefObject<{ x: number; y: number }>;
+}) {
   const { camera } = useThree();
   useFrame(() => {
     const cam = camera as THREE.PerspectiveCamera;
@@ -40,6 +48,17 @@ function CameraRig({ look, fov }: { look: React.RefObject<Look>; fov: React.Muta
       cam.fov += (target - cam.fov) * 0.15;
       cam.updateProjectionMatrix();
     }
+
+    if (joystick.current.x !== 0 || joystick.current.y !== 0) {
+      const speedMultiplier = fov.current / 90;
+      look.current.lon += joystick.current.x * 2.2 * speedMultiplier;
+      look.current.lat = THREE.MathUtils.clamp(
+        look.current.lat + joystick.current.y * 2.2 * speedMultiplier,
+        -85,
+        85
+      );
+    }
+
     const { lon, lat } = look.current;
     const phi = THREE.MathUtils.degToRad(90 - lat);
     const theta = THREE.MathUtils.degToRad(lon);
@@ -70,6 +89,12 @@ export function PhotosphereViewer({ url }: { url: string }) {
   const lastPointer = useRef({ x: 0, y: 0 });
   const lastPinchDist = useRef(0);
   const lastTouchCount = useRef(0);
+
+  // Joystick state & refs
+  const joystickRef = useRef({ x: 0, y: 0 });
+  const [joystickPos, setJoystickPos] = useState({ x: 0, y: 0 });
+  const joystickActive = useRef(false);
+  const joystickPointerId = useRef<number | null>(null);
 
   const setFov = useCallback((v: number) => {
     fovRef.current = THREE.MathUtils.clamp(v, MIN_FOV, MAX_FOV);
@@ -139,6 +164,55 @@ export function PhotosphereViewer({ url }: { url: string }) {
     else document.exitFullscreen?.();
   };
 
+  // Joystick handlers
+  const onJoystickDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    joystickActive.current = true;
+    joystickPointerId.current = e.pointerId;
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  };
+
+  const onJoystickMove = (e: React.PointerEvent) => {
+    if (!joystickActive.current || joystickPointerId.current !== e.pointerId) return;
+    e.stopPropagation();
+
+    const base = document.getElementById('joystick-base');
+    if (!base) return;
+    const rect = base.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    const dx = e.clientX - centerX;
+    const dy = centerY - e.clientY; // Invert Y so up is positive
+
+    const dist = Math.hypot(dx, dy);
+    const maxRadius = 30; // max travel radius
+
+    let targetX = dx;
+    let targetY = dy;
+
+    if (dist > maxRadius) {
+      targetX = (dx / dist) * maxRadius;
+      targetY = (dy / dist) * maxRadius;
+    }
+
+    setJoystickPos({ x: targetX, y: -targetY });
+
+    joystickRef.current = {
+      x: targetX / maxRadius,
+      y: targetY / maxRadius,
+    };
+  };
+
+  const onJoystickUp = (e: React.PointerEvent) => {
+    if (!joystickActive.current) return;
+    e.stopPropagation();
+    joystickActive.current = false;
+    joystickPointerId.current = null;
+    setJoystickPos({ x: 0, y: 0 });
+    joystickRef.current = { x: 0, y: 0 };
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const step = fovRef.current / 15;
@@ -188,7 +262,7 @@ export function PhotosphereViewer({ url }: { url: string }) {
         <Suspense fallback={<LoadingHint />}>
           <Sphere url={url} />
         </Suspense>
-        <CameraRig look={look} fov={fovRef} />
+        <CameraRig look={look} fov={fovRef} joystick={joystickRef} />
       </Canvas>
 
       <div className="pointer-events-auto absolute right-3 top-3 flex flex-wrap justify-end gap-2">
@@ -198,8 +272,32 @@ export function PhotosphereViewer({ url }: { url: string }) {
         <Btn onClick={toggleFullscreen} label="⛶" />
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 left-0 right-0 text-center text-xs text-white/50">
-        Drag to look · Scroll / pinch to zoom · Arrow keys to pan
+      {/* Joystick / Gyroscope touchpad controller */}
+      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
+        <div
+          id="joystick-base"
+          className="h-20 w-20 rounded-full bg-slate-950/60 border border-slate-800/80 backdrop-blur flex items-center justify-center pointer-events-auto"
+        >
+          <div
+            id="joystick-handle"
+            className="h-10 w-10 rounded-full bg-white shadow-xl cursor-pointer flex items-center justify-center transition-shadow duration-150 active:shadow-inner"
+            style={{
+              transform: `translate(${joystickPos.x}px, ${joystickPos.y}px)`,
+              touchAction: 'none',
+            }}
+            onPointerDown={onJoystickDown}
+            onPointerMove={onJoystickMove}
+            onPointerUp={onJoystickUp}
+            onPointerCancel={onJoystickUp}
+          >
+            {/* Visual look indicator */}
+            <div className="h-2 w-2 rounded-full bg-slate-400" />
+          </div>
+        </div>
+      </div>
+
+      <div className="pointer-events-none absolute bottom-2 left-0 right-0 text-center text-[10px] text-white/40">
+        Drag to look · Use stick to pan · Pinch to zoom
       </div>
     </div>
   );

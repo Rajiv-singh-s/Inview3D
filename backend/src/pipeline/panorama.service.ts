@@ -102,7 +102,7 @@ export class PanoramaService {
 
   private stitch(ws: PanoramaWorkspace, panoPath: string, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(path.dirname(panoPath), { recursive: true });
-    const script = path.join(this.app.pipelineScriptsDir, '..', 'python', 'stitch_panorama.py');
+    const script = path.join(this.app.pipelineScriptsDir, 'stitch_panorama.py');
     const args = [
       script,
       '--input',
@@ -114,9 +114,14 @@ export class PanoramaService {
       '--max-width',
       String(this.app.panoramaMaxWidth),
     ];
-    return runCommand('python3', args, log).catch((err) => {
+    
+    // On Windows, 'python' is the standard executable, whereas 'python3' is common on Unix.
+    const primaryCmd = process.platform === 'win32' ? 'python' : 'python3';
+    const fallbackCmd = process.platform === 'win32' ? 'python3' : 'python';
+
+    return runCommand(primaryCmd, args, log).catch((err) => {
       if (err instanceof CommandError && err.code === null) {
-        return runCommand('python', args, log);
+        return runCommand(fallbackCmd, args, log);
       }
       throw err;
     });

@@ -44,7 +44,7 @@ COPY processing ./processing
 ENV NODE_ENV=production
 ENV UPLOAD_PATH=/data/uploads
 ENV OUTPUT_PATH=/data/output
-ENV PIPELINE_SCRIPTS_DIR=/app/processing/scripts
+ENV PIPELINE_SCRIPTS_DIR=/app/processing/python
 RUN mkdir -p /data/uploads /data/output
 
 WORKDIR /app/backend
