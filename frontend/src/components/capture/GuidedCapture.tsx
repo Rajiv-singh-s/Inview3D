@@ -143,10 +143,20 @@ export function GuidedCapture({
     let cancelled = false;
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
-          audio: false,
-        });
+        let stream: MediaStream;
+        try {
+          // Attempt to request an ultra-wide / 0.5x zoom if supported by mobile browsers
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, zoom: { ideal: 0.5 } } as any,
+            audio: false,
+          });
+        } catch (e) {
+          // Fallback if overconstrained
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+            audio: false,
+          });
+        }
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
@@ -255,21 +265,56 @@ export function GuidedCapture({
     const visible: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }> = [];
 
     let currentTarget: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
+    
+    // Camera orientation in radians
+    const cy = (orient.yaw * Math.PI) / 180;
+    const cp = (orient.pitch * Math.PI) / 180;
+    
+    // Camera Forward vector (Z)
+    const fz_x = Math.cos(cp) * Math.sin(cy);
+    const fz_y = Math.sin(cp);
+    const fz_z = Math.cos(cp) * Math.cos(cy);
+    
+    // Camera Right vector (X)
+    const rx = Math.cos(cy);
+    const ry = 0;
+    const rz = -Math.sin(cy);
+    
+    // Camera Up vector (Y)
+    const ux = fz_y * rz - fz_z * ry;
+    const uy = fz_z * rx - fz_x * rz;
+    const uz = fz_x * ry - fz_y * rx;
+
+    const hScale = Math.tan((H_FOV / 2) * Math.PI / 180);
+    const vScale = Math.tan((V_FOV / 2) * Math.PI / 180);
+
     lookahead.forEach((index) => {
       const t = targets[index];
-      const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
+      const tYawTrue = (base + t.yaw) % 360;
+      const dYaw = angleDelta(orient.yaw, tYawTrue);
       const dPitch = t.pitch - orient.pitch;
       const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
+      
       if (index === nextTargetIndex) currentTarget = { index, dist, dYaw, dPitch };
 
-      if (Math.abs(dYaw) <= H_FOV && Math.abs(dPitch) <= V_FOV) {
-        visible.push({
-          index,
-          x: 50 + (dYaw / H_FOV) * 46,
-          y: 50 - (dPitch / V_FOV) * 43,
-          dist,
-          isTaken: taken[index],
-        });
+      const ty = (tYawTrue * Math.PI) / 180;
+      const tp = (t.pitch * Math.PI) / 180;
+      
+      const tx = Math.cos(tp) * Math.sin(ty);
+      const ty_vec = Math.sin(tp);
+      const tz = Math.cos(tp) * Math.cos(ty);
+      
+      const localZ = tx * fz_x + ty_vec * fz_y + tz * fz_z;
+      const localX = tx * rx + ty_vec * ry + tz * rz;
+      const localY = tx * ux + ty_vec * uy + tz * uz;
+      
+      if (localZ > 0) {
+        const screenX = 50 + ((localX / localZ) / hScale) * 50;
+        const screenY = 50 - ((localY / localZ) / vScale) * 50;
+        
+        if (screenX >= -20 && screenX <= 120 && screenY >= -20 && screenY <= 120) {
+          visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
+        }
       }
     });
 
@@ -356,19 +401,6 @@ export function GuidedCapture({
               </button>
             </div>
 
-            {/* Location Component */}
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-blue-400">📍</span>
-                <span className="font-medium">Taketomi, Japan 🇯🇵</span>
-              </div>
-              <div className="h-24 w-full rounded-xl bg-slate-900 border border-slate-800 overflow-hidden relative flex items-center justify-center">
-                <div className="absolute inset-0 bg-blue-900/10 flex flex-col items-center justify-center text-xs text-slate-500">
-                  <span>Map Preview</span>
-                  <span className="mt-1 text-[10px]">24.329° N, 124.088° E</span>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -406,6 +438,17 @@ export function GuidedCapture({
   }
 
   const aligned = current != null && current.dist <= TOLERANCE_DEG;
+
+  const hint =
+    current == null
+      ? null
+      : Math.abs(current.dYaw) > Math.abs(current.dPitch)
+        ? current.dYaw > 0
+          ? 'Turn right >'
+          : '< Turn left'
+        : current.dPitch > 0
+          ? 'Tilt up ^'
+          : 'Tilt down v';
 
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
@@ -451,6 +494,13 @@ export function GuidedCapture({
             }}
           />
         ))}
+
+        {/* Directional hint */}
+        {hasCompass && hint && !aligned && (
+          <div className="absolute left-1/2 top-[62%] -translate-x-1/2 rounded-full bg-black/60 px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm">
+            {hint}
+          </div>
+        )}
 
         {/* Centre reticle */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
