@@ -6,93 +6,50 @@ export interface Target {
   face: string;
   yaw: number;
   pitch: number;
+  label: string;
 }
 
 function buildCubemapTargets(): Target[] {
   return [
     // FRONT
-    { face: 'front', yaw: 0, pitch: 0 },
-    { face: 'front', yaw: -20, pitch: 0 },
-    { face: 'front', yaw: 20, pitch: 0 },
+    { face: 'front', yaw: -20, pitch: 0, label: 'FRONT LEFT' },
+    { face: 'front', yaw: 0, pitch: 0, label: 'FRONT CENTER' },
+    { face: 'front', yaw: 20, pitch: 0, label: 'FRONT RIGHT' },
     
     // RIGHT
-    { face: 'right', yaw: 90, pitch: 0 },
-    { face: 'right', yaw: 70, pitch: 0 },
-    { face: 'right', yaw: 110, pitch: 0 },
+    { face: 'right', yaw: 70, pitch: 0, label: 'RIGHT LEFT' },
+    { face: 'right', yaw: 90, pitch: 0, label: 'RIGHT CENTER' },
+    { face: 'right', yaw: 110, pitch: 0, label: 'RIGHT RIGHT' },
     
     // BACK
-    { face: 'back', yaw: 180, pitch: 0 },
-    { face: 'back', yaw: 160, pitch: 0 },
-    { face: 'back', yaw: -160, pitch: 0 },
+    { face: 'back', yaw: 160, pitch: 0, label: 'BACK LEFT' },
+    { face: 'back', yaw: 180, pitch: 0, label: 'BACK CENTER' },
+    { face: 'back', yaw: -160, pitch: 0, label: 'BACK RIGHT' },
     
     // LEFT
-    { face: 'left', yaw: -90, pitch: 0 },
-    { face: 'left', yaw: -110, pitch: 0 },
-    { face: 'left', yaw: -70, pitch: 0 },
+    { face: 'left', yaw: -110, pitch: 0, label: 'LEFT LEFT' },
+    { face: 'left', yaw: -90, pitch: 0, label: 'LEFT CENTER' },
+    { face: 'left', yaw: -70, pitch: 0, label: 'LEFT RIGHT' },
     
-    // TOP
-    { face: 'top', yaw: 0, pitch: 90 },
-    { face: 'top', yaw: 0, pitch: 70 },
-    { face: 'top', yaw: 180, pitch: 70 },
+    // TOP (CEILING)
+    { face: 'top', yaw: -20, pitch: 75, label: 'CEILING LEFT' },
+    { face: 'top', yaw: 0, pitch: 75, label: 'CEILING CENTER' },
+    { face: 'top', yaw: 20, pitch: 75, label: 'CEILING RIGHT' },
     
-    // BOTTOM
-    { face: 'bottom', yaw: 0, pitch: -90 },
-    { face: 'bottom', yaw: 0, pitch: -70 },
-    { face: 'bottom', yaw: 180, pitch: -70 },
+    // BOTTOM (FLOOR)
+    { face: 'bottom', yaw: -20, pitch: -75, label: 'FLOOR LEFT' },
+    { face: 'bottom', yaw: 0, pitch: -75, label: 'FLOOR CENTER' },
+    { face: 'bottom', yaw: 20, pitch: -75, label: 'FLOOR RIGHT' },
   ];
 }
 
 export const TOTAL_SHOTS = 18;
-
-const TOLERANCE_DEG = 8;
-const CAPTURE_DWELL_MS = 300;
-const MAX_DOT_BEARING_DEG = 120;
-const MIN_SHARPNESS = 10;
-const MAX_ROTATION_DEG_PER_SEC = 25;
-const DOT_RADIUS_X = 42;
-const DOT_RADIUS_Y = 30;
 
 export interface CapturedShot {
   blob: Blob;
   face: string;
   yaw: number;
   pitch: number;
-}
-
-function angleDelta(a: number, b: number): number {
-  return ((((b - a) % 360) + 540) % 360) - 180;
-}
-
-function sharpness(video: HTMLVideoElement): number {
-  const W = 160;
-  const H = Math.max(1, Math.round((video.videoHeight / video.videoWidth) * W));
-  const c = document.createElement('canvas');
-  c.width = W;
-  c.height = H;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  if (!ctx) return Number.POSITIVE_INFINITY; 
-  ctx.drawImage(video, 0, 0, W, H);
-  const { data } = ctx.getImageData(0, 0, W, H);
-
-  const gray = new Float32Array(W * H);
-  for (let i = 0; i < W * H; i++) {
-    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
-  }
-
-  let sum = 0;
-  let sumSq = 0;
-  let n = 0;
-  for (let y = 1; y < H - 1; y++) {
-    for (let x = 1; x < W - 1; x++) {
-      const i = y * W + x;
-      const lap = 4 * gray[i] - gray[i - 1] - gray[i + 1] - gray[i - W] - gray[i + W];
-      sum += lap;
-      sumSq += lap * lap;
-      n++;
-    }
-  }
-  const mean = sum / n;
-  return sumSq / n - mean * mean;
 }
 
 interface GuidedCaptureProps {
@@ -103,54 +60,6 @@ interface GuidedCaptureProps {
   onCancel: () => void;
   busy?: boolean;
   uploadProgress?: number;
-}
-
-// 3D Perspective Projection helper
-function projectTarget(
-  targetYaw: number,
-  targetPitch: number,
-  cameraYaw: number,
-  cameraPitch: number,
-  baseYaw: number
-): { x: number; y: number; visible: boolean } {
-  const absTargetYaw = (baseYaw + targetYaw) % 360;
-  
-  const theta_t = (absTargetYaw * Math.PI) / 180;
-  const phi_t = (targetPitch * Math.PI) / 180;
-  
-  const theta_c = (cameraYaw * Math.PI) / 180;
-  const phi_c = (cameraPitch * Math.PI) / 180;
-  
-  // 3D vector of target in world coordinates
-  const x_w = Math.sin(theta_t) * Math.cos(phi_t);
-  const y_w = Math.sin(phi_t);
-  const z_w = -Math.cos(theta_t) * Math.cos(phi_t);
-  
-  // Rotate by -theta_c around Y
-  const x1 = x_w * Math.cos(theta_c) + z_w * Math.sin(theta_c);
-  const y1 = y_w;
-  const z1 = -x_w * Math.sin(theta_c) + z_w * Math.cos(theta_c);
-  
-  // Rotate by -phi_c around X
-  const x_c = x1;
-  const y_c = y1 * Math.cos(phi_c) + z1 * Math.sin(phi_c);
-  const z_c = -y1 * Math.sin(phi_c) + z1 * Math.cos(phi_c);
-  
-  if (z_c >= 0) {
-    return { x: 0, y: 0, visible: false };
-  }
-  
-  // Perspective projection factor (adjust to match typical mobile back camera FOV)
-  const f = 1.35; 
-  
-  const u = f * (x_c / -z_c);
-  const v = f * (y_c / -z_c);
-  
-  const x = 50 + u * 50;
-  const y = 50 - v * 50;
-  
-  const visible = x >= -10 && x <= 110 && y >= -10 && y <= 110;
-  return { x, y, visible };
 }
 
 export function GuidedCapture({
@@ -165,46 +74,17 @@ export function GuidedCapture({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const capturingRef = useRef(false);
-  
-  // Positional Tracking via WebXR / DeviceMotion
-  const [originSet, setOriginSet] = useState(false);
-  const [posError, setPosError] = useState<string | null>(null);
-  
-  const baseYawRef = useRef<number | null>(null);
-  const capturedOrderRef = useRef<number[]>([]);
-  const alignedSinceRef = useRef<number | null>(null);
-  const shotsLengthRef = useRef(0);
-  shotsLengthRef.current = shots.length;
-
   const targets = useMemo(buildCubemapTargets, []);
   
-  // Capture faces sequentially or let user chase closest?
-  // We'll let them chase the closest untaken target.
-  const taken = useMemo(() => {
-    const arr = targets.map(() => false);
-    capturedOrderRef.current.slice(0, shots.length).forEach((idx) => {
-      if (idx >= 0 && idx < arr.length) arr[idx] = true;
-    });
-    return arr;
-  }, [shots.length, targets]);
-
   const [error, setError] = useState<string | null>(null);
-  const [orient, setOrient] = useState<{ yaw: number; pitch: number } | null>(null);
-  const [hasCompass, setHasCompass] = useState(false);
   const [ready, setReady] = useState(false);
   const [flash, setFlash] = useState(false);
-  const [dwellProgress, setDwellProgress] = useState(0);
-  const [rejected, setRejected] = useState<string | null>(null);
-  
-  const rotSpeedRef = useRef(0);
-  const prevOrientRef = useRef<{ yaw: number; pitch: number; t: number } | null>(null);
-  const [capturePhase, setCapturePhase] = useState<'origin' | 'capturing' | 'review'>('origin');
-  const [isPrivate, setIsPrivate] = useState(false);
+  const [capturePhase, setCapturePhase] = useState<'capturing' | 'review'>('capturing');
   const [isPortrait, setIsPortrait] = useState(true);
 
   const count = shots.length;
-  const done = taken.every(Boolean);
 
+  // Auto transition to review phase when done
   useEffect(() => {
     if (count === TOTAL_SHOTS && capturePhase === 'capturing') {
       setCapturePhase('review');
@@ -237,27 +117,22 @@ export function GuidedCapture({
       );
 
       if (backCameras.length > 0) {
-        // Look for camera matching 0.5x or ultra-wide keywords
         const ultraWide = backCameras.find(d => 
           d.label.toLowerCase().includes('ultra') || 
           d.label.toLowerCase().includes('0.5') ||
           d.label.toLowerCase().includes('wide')
         );
         if (ultraWide) return ultraWide.deviceId;
-        
-        // On many Android devices, the second back camera is the ultra-wide
-        if (backCameras.length > 1) {
-          return backCameras[1].deviceId;
-        }
+        if (backCameras.length > 1) return backCameras[1].deviceId;
         return backCameras[0].deviceId;
       }
-    } catch (e) {
-      console.warn('Failed to enumerate cameras:', e);
+      return null;
+    } catch {
+      return null;
     }
-    return null;
   };
 
-  // ---- Camera Initialization ----------------------------------------------
+  // ---- Initialize Camera Stream -------------------------------------------
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -266,28 +141,25 @@ export function GuidedCapture({
         const deviceId = await getWideCameraId();
         
         try {
-          // Attempt wide-angle camera by ID or constraints
           stream = await navigator.mediaDevices.getUserMedia({
             video: deviceId 
               ? { deviceId: { exact: deviceId }, width: { ideal: 1920 } }
               : { 
                   facingMode: { ideal: 'environment' }, 
                   width: { ideal: 1920 },
-                  // @ts-ignore - experimental constraints
+                  // @ts-ignore
                   focusMode: 'continuous',
                   zoom: { ideal: 0.5 } 
                 } as any,
             audio: false,
           });
         } catch {
-          // Fallback
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
             audio: false,
           });
         }
         
-        // Attempt to lock focus/exposure if track supports it
         const track = stream.getVideoTracks()[0];
         try {
            const capabilities = track.getCapabilities() as any;
@@ -298,7 +170,7 @@ export function GuidedCapture({
              await track.applyConstraints(constraints);
            }
         } catch (e) {
-           // Ignore unsupported constraints
+           // Ignore constraints error
         }
 
         if (cancelled) {
@@ -321,291 +193,74 @@ export function GuidedCapture({
     };
   }, []);
 
-  // ---- Orientation Tracking ----------------------------------------------
-  useEffect(() => {
-    if (capturePhase !== 'capturing' && capturePhase !== 'origin') return;
-    const onOrientation = (e: DeviceOrientationEvent) => {
-      // Ignore webkitCompassHeading to completely bypass magnetic/compass drift indoors.
-      // e.alpha is relative to the device's starting direction, which is extremely stable.
-      const yawRaw = e.alpha != null ? 360 - e.alpha : null;
-      if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return;
-      
-      setHasCompass(true);
-      const yaw = ((yawRaw % 360) + 360) % 360;
-      const pitch = Math.max(-90, Math.min(90, e.beta - 90));
-
-      const now = performance.now();
-      const prev = prevOrientRef.current;
-      if (prev) {
-        const dt = (now - prev.t) / 1000;
-        if (dt > 0.01) {
-          const moved = Math.hypot(angleDelta(prev.yaw, yaw), pitch - prev.pitch);
-          rotSpeedRef.current = 0.6 * rotSpeedRef.current + 0.4 * (moved / dt);
-          prevOrientRef.current = { yaw, pitch, t: now };
-        }
-      } else {
-        prevOrientRef.current = { yaw, pitch, t: now };
-      }
-
-      // Smooth orient with a low-pass filter to keep dots rock-solid on screen
-      setOrient((prevVal) => {
-        if (!prevVal) return { yaw, pitch };
-        
-        let dY = yaw - prevVal.yaw;
-        if (dY > 180) dY -= 360;
-        if (dY < -180) dY += 360;
-        
-        const smoothedYaw = (prevVal.yaw + dY * 0.25 + 360) % 360;
-        const smoothedPitch = prevVal.pitch + (pitch - prevVal.pitch) * 0.25;
-        
-        return { yaw: smoothedYaw, pitch: smoothedPitch };
-      });
-    };
-    
-    // Simulate Positional drift warning
-    const onMotion = (e: DeviceMotionEvent) => {
-       if (!originSet) return;
-       // We can't robustly integrate acc to position without heavy drift.
-       // For this demo, we'll just check if acceleration is too high, indicating walking.
-       if (e.acceleration) {
-         const acc = Math.hypot(e.acceleration.x || 0, e.acceleration.y || 0, e.acceleration.z || 0);
-         if (acc > 3.0) { // arbitrary threshold for walking vs rotating
-           setPosError('Move back to the capture position');
-         } else if (posError) {
-           // gradually clear it?
-           setTimeout(() => setPosError(null), 2000);
-         }
-       }
-    };
-    
-    window.addEventListener('deviceorientation', onOrientation, true);
-    window.addEventListener('devicemotion', onMotion, true);
-    return () => {
-      window.removeEventListener('deviceorientation', onOrientation, true);
-      window.removeEventListener('devicemotion', onMotion, true);
-    };
-  }, [capturePhase, originSet, posError]);
-
-  const setCaptureOrigin = useCallback(() => {
-     if (orient) {
-        baseYawRef.current = orient.yaw;
-        setOriginSet(true);
-        setCapturePhase('capturing');
-     }
-  }, [orient]);
-
   const triggerFlash = useCallback(() => {
     setFlash(true);
     setTimeout(() => setFlash(false), 120);
   }, []);
 
-  const takeShot = useCallback(
-    (targetIndex: number) => {
-      const video = videoRef.current;
-      if (!video || capturingRef.current || video.videoWidth === 0 || posError) return;
-
-      const sharp = sharpness(video);
-      if (sharp < MIN_SHARPNESS) {
-        setRejected('Hold steady — blurry frame');
-        alignedSinceRef.current = null;
-        setDwellProgress(0);
-        return;
-      }
-      setRejected(null);
-      capturingRef.current = true;
-
-      const shotIndex = shotsLengthRef.current;
-      const target = targets[targetIndex];
-
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d')?.drawImage(video, 0, 0);
-      canvas.toBlob(
-        (blob) => {
-          if (blob) {
-            capturedOrderRef.current = [...capturedOrderRef.current.slice(0, shotIndex), targetIndex];
-            // Calculate yaw relative to the capture origin (baseYaw)
-            const absYaw = orient?.yaw ?? 0;
-            const relYaw = baseYawRef.current != null ? angleDelta(baseYawRef.current, absYaw) : 0;
-
-            onShot({ blob, face: target.face, yaw: relYaw, pitch: orient?.pitch ?? 0 });
-            triggerFlash();
-            alignedSinceRef.current = null;
-            setDwellProgress(0);
-          }
-          setTimeout(() => (capturingRef.current = false), 400);
-        },
-        'image/jpeg',
-        0.92,
-      );
-    },
-    [onShot, orient, triggerFlash, posError, targets],
-  );
-
   const takeManualShot = useCallback(() => {
-    const idx = targets.findIndex((_, i) => !taken[i]);
-    if (idx < 0) return;
-    takeShot(idx);
-  }, [targets, taken, takeShot]);
+    const video = videoRef.current;
+    if (!video || capturingRef.current || video.videoWidth === 0 || count >= TOTAL_SHOTS) return;
 
-  // Find the closest untaken target
-  const nextTargetIndex = useMemo(() => {
-    if (!orient || baseYawRef.current == null) return null;
-    let closestIdx = -1;
-    let minD = Infinity;
-    const base = baseYawRef.current;
+    capturingRef.current = true;
+    const target = targets[count];
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d')?.drawImage(video, 0, 0);
     
-    targets.forEach((t, i) => {
-      if (taken[i]) return;
-      const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
-      const dPitch = t.pitch - orient.pitch;
-      // Scale dYaw by cos(pitch) to prevent gimbal lock artifacts near poles
-      const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
-      if (dist < minD) {
-        minD = dist;
-        closestIdx = i;
-      }
-    });
-    return closestIdx >= 0 ? closestIdx : null;
-  }, [orient, targets, taken]);
-
-  // Project all dots using 3D Perspective Projection
-  const dots = useMemo(() => {
-    if (!orient || baseYawRef.current == null) return [];
-    const base = baseYawRef.current;
-
-    return targets.map((t, index) => {
-      const proj = projectTarget(t.yaw, t.pitch, orient.yaw, orient.pitch, base);
-      
-      const absTargetYaw = (base + t.yaw) % 360;
-      const dYaw = angleDelta(orient.yaw, absTargetYaw);
-      const dPitch = t.pitch - orient.pitch;
-      const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
-
-      return {
-        index,
-        x: proj.x,
-        y: proj.y,
-        visible: proj.visible,
-        dist,
-        isTaken: taken[index],
-      };
-    });
-  }, [orient, targets, taken]);
-
-  const current = useMemo(() => {
-    if (nextTargetIndex === null || !orient || baseYawRef.current == null) return null;
-    const t = targets[nextTargetIndex];
-    const base = baseYawRef.current;
-    
-    const absTargetYaw = (base + t.yaw) % 360;
-    const dYaw = angleDelta(orient.yaw, absTargetYaw);
-    const dPitch = t.pitch - orient.pitch;
-    const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
-    
-    return {
-      index: nextTargetIndex,
-      dist,
-      dYaw,
-      dPitch,
-    };
-  }, [nextTargetIndex, orient, targets]);
-
-  // Compute 3D Grid Paths (Lines of constant Yaw and Pitch locked to the world coordinates)
-  const gridPaths = useMemo(() => {
-    if (!orient || baseYawRef.current == null) return [];
-    const base = baseYawRef.current;
-    const paths: string[] = [];
-
-    // Horizontal grid lines (constant Pitch rings)
-    const pitches = [-45, 0, 45];
-    pitches.forEach((p) => {
-      let pathStr = '';
-      let first = true;
-      for (let y = 0; y <= 360; y += 10) {
-        const proj = projectTarget(y, p, orient.yaw, orient.pitch, base);
-        if (proj.visible) {
-          if (first) {
-            pathStr += `M ${proj.x} ${proj.y}`;
-            first = false;
-          } else {
-            pathStr += ` L ${proj.x} ${proj.y}`;
-          }
-        } else {
-          first = true; // Break connection if line goes behind
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          // Use perfect mathematical nominal pose for zero-defect projection warping
+          onShot({ 
+            blob, 
+            face: target.face, 
+            yaw: target.yaw, 
+            pitch: target.pitch 
+          });
+          triggerFlash();
         }
-      }
-      if (pathStr) paths.push(pathStr);
-    });
-
-    // Vertical grid lines (constant Yaw planes)
-    const yaws = [0, 45, 90, 135, 180, 225, 270, 315];
-    yaws.forEach((y) => {
-      let pathStr = '';
-      let first = true;
-      for (let p = -80; p <= 80; p += 10) {
-        const proj = projectTarget(y, p, orient.yaw, orient.pitch, base);
-        if (proj.visible) {
-          if (first) {
-            pathStr += `M ${proj.x} ${proj.y}`;
-            first = false;
-          } else {
-            pathStr += ` L ${proj.x} ${proj.y}`;
-          }
-        } else {
-          first = true;
-        }
-      }
-      if (pathStr) paths.push(pathStr);
-    });
-
-    return paths;
-  }, [orient]);
-
-  useEffect(() => {
-    if (!ready || busy || done || !hasCompass || capturePhase !== 'capturing' || posError) return;
-    if (!current) return;
-
-    let animFrame: number;
-    const updateProgress = () => {
-      if (rotSpeedRef.current > MAX_ROTATION_DEG_PER_SEC) {
-        alignedSinceRef.current = null;
-        setDwellProgress(0);
-        setRejected('Slow down');
-        animFrame = requestAnimationFrame(updateProgress);
-        return;
-      }
-      setRejected((r) => (r === 'Slow down' ? null : r));
-
-      if (current.dist <= TOLERANCE_DEG) {
-        const now = Date.now();
-        if (alignedSinceRef.current == null) {
-          alignedSinceRef.current = now;
-        }
-        const elapsed = now - alignedSinceRef.current;
-        const progress = Math.min(1, elapsed / CAPTURE_DWELL_MS);
-        setDwellProgress(progress);
-        if (elapsed >= CAPTURE_DWELL_MS) {
-          takeShot(current.index);
-          return;
-        }
-        animFrame = requestAnimationFrame(updateProgress);
-      } else {
-        alignedSinceRef.current = null;
-        setDwellProgress(0);
-      }
-    };
-
-    updateProgress();
-    return () => cancelAnimationFrame(animFrame);
-  }, [ready, busy, done, hasCompass, current, takeShot, capturePhase, posError]);
+        setTimeout(() => (capturingRef.current = false), 300);
+      },
+      'image/jpeg',
+      0.92,
+    );
+  }, [count, targets, onShot, triggerFlash]);
 
   const imageUrls = useMemo(() => shots.map((s) => URL.createObjectURL(s.blob)), [shots]);
 
   useEffect(() => {
     return () => imageUrls.forEach((url) => URL.revokeObjectURL(url));
   }, [imageUrls]);
+
+  // ---- Get Current Instruction Text ---------------------------------------
+  const guidance = useMemo(() => {
+    if (count >= TOTAL_SHOTS) return { step: 'Finished', text: 'All shots captured! Proceed to stitch.' };
+    const t = targets[count];
+    const faceName = t.face.toUpperCase();
+    
+    let turnHint = '';
+    if (count === 0) turnHint = 'Start facing the center of the FRONT wall.';
+    else if (count === 3) turnHint = 'Turn 90° to the RIGHT wall.';
+    else if (count === 6) turnHint = 'Turn 90° to the BACK wall.';
+    else if (count === 9) turnHint = 'Turn 90° to the LEFT wall.';
+    else if (count === 12) turnHint = 'Tilt your phone UP 75° to the CEILING.';
+    else if (count === 15) turnHint = 'Tilt your phone DOWN 75° to the FLOOR.';
+
+    let targetHint = '';
+    if (count % 3 === 0) targetHint = 'Align with the LEFT column dot (Left Overlap).';
+    else if (count % 3 === 1) targetHint = 'Align with the CENTER column dot (Face Center).';
+    else if (count % 3 === 2) targetHint = 'Align with the RIGHT column dot (Right Overlap).';
+
+    return {
+      face: faceName,
+      step: `Shot ${count + 1} of ${TOTAL_SHOTS}`,
+      turn: turnHint,
+      target: targetHint,
+    };
+  }, [count, targets]);
 
   // ========================================================================
   //  PORTRAIT ENFORCEMENT
@@ -631,35 +286,6 @@ export function GuidedCapture({
         <p className="font-medium text-red-300">Camera unavailable</p>
         <p className="mt-1 text-sm text-red-200/80">{error}</p>
         <button onClick={onCancel} className="btn-ghost mt-4">Back</button>
-      </div>
-    );
-  }
-
-  // ========================================================================
-  //  ORIGIN PHASE
-  // ========================================================================
-  if (capturePhase === 'origin') {
-    return (
-      <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
-        <video ref={videoRef} playsInline muted className="h-[85vh] w-full bg-black object-cover" />
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40 backdrop-blur-[2px] p-6 text-center">
-          <h2 className="text-2xl font-bold text-white mb-4">Set Capture Origin</h2>
-          <p className="text-white/80 mb-8">
-            Stand in the center of the room where you want to capture the cubemap. 
-            Do not walk around during the capture.
-          </p>
-          <div className="border-2 border-dashed border-white/50 w-48 h-48 rounded-full flex items-center justify-center mb-8">
-            <div className="w-2 h-2 bg-white rounded-full" />
-          </div>
-          <button 
-            onClick={setCaptureOrigin}
-            disabled={!hasCompass}
-            className="w-full rounded-xl bg-green-500 py-3 font-semibold text-white disabled:opacity-40"
-          >
-            {hasCompass ? 'Set Origin & Start' : 'Waiting for sensors...'}
-          </button>
-        </div>
-        <button onClick={onCancel} className="absolute top-4 right-4 text-white p-2">✕</button>
       </div>
     );
   }
@@ -707,130 +333,102 @@ export function GuidedCapture({
   // ========================================================================
   //  CAPTURE PHASE
   // ========================================================================
-  const aligned = current != null && current.dist <= TOLERANCE_DEG;
-
-  const directionHint = ((): string | null => {
-    if (current == null || aligned || !orient) return null;
-    const { dYaw, dPitch } = current;
-    // Scale yaw delta by the cosine of the pitch to prevent unstable/large yaw guidance at the poles
-    const scaledDYaw = dYaw * Math.cos((orient.pitch * Math.PI) / 180);
-    if (Math.abs(scaledDYaw) >= Math.abs(dPitch)) return dYaw > 0 ? 'Turn right →' : '← Turn left';
-    return dPitch > 0 ? 'Tilt up ↑' : 'Tilt down ↓';
-  })();
+  const activeDotIndex = count % 3;
 
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
       <video ref={videoRef} playsInline muted className="h-[85vh] w-full bg-black object-cover" />
 
+      {/* Screen flash effect */}
       <div
         className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-75"
         style={{ opacity: flash ? 0.6 : 0 }}
       />
 
+      {/* Grid and Dots Overlay */}
       <div className="pointer-events-none absolute inset-0">
-        {/* 3D Grid Overlay */}
-        <svg className="absolute inset-0 w-full h-full pointer-events-none">
-          {gridPaths.map((pathStr, idx) => (
-            <path
-              key={idx}
-              d={pathStr}
-              fill="none"
-              stroke="rgba(255,255,255,0.18)"
-              strokeWidth="1.2"
-              strokeDasharray="4 4"
-            />
-          ))}
-        </svg>
+        
+        {/* Visual guide layout (matches user hand-drawn diagram) */}
+        <div className="absolute inset-0">
+          {/* Vertical Column Lines */}
+          <div className="absolute left-[33.33%] top-0 bottom-0 border-l border-white/20 border-dashed" />
+          <div className="absolute left-[66.66%] top-0 bottom-0 border-l border-white/20 border-dashed" />
+          
+          {/* Horizontal Bounds */}
+          <div className="absolute top-[18%] left-0 right-0 border-t border-white/20 border-dashed" />
+          <div className="absolute bottom-[18%] left-0 right-0 border-t border-white/20 border-dashed" />
 
-        <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/20" />
-
-        {dots.filter(d => d.visible).map((d) => {
-          const isNext = d.index === nextTargetIndex;
-          const isAligned = isNext && d.dist <= TOLERANCE_DEG;
-          const size = isNext ? (isAligned ? 38 : 26) : 20;
-
-          return (
-            <div
-              key={d.index}
-              className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
-              style={{
-                left: `${d.x}%`,
-                top: `${d.y}%`,
-                width: size,
-                height: size,
-                backgroundColor: d.isTaken
-                  ? 'rgba(34,197,94,0.95)' // green
-                  : isNext
-                    ? 'rgba(255,255,255,0.95)' // bright white
-                    : 'rgba(255,255,255,0.6)', // dim white
-                border: d.isTaken
-                  ? '2px solid rgba(34,197,94,1)'
-                  : isAligned
-                    ? '3px solid rgba(34,197,94,0.95)'
-                    : 'none',
-                boxShadow: isAligned
-                  ? '0 0 12px rgba(255,255,255,0.7), 0 0 0 4px rgba(34,197,94,0.35)'
-                  : 'none',
-                transition: 'all 0.15s ease-out',
-              }}
-            />
-          );
-        })}
-
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-          <div
-            className={`relative grid h-16 w-16 place-items-center rounded-full border-[3px] transition-all duration-150 ${
-              aligned
-                ? 'scale-110 border-white bg-green-500/20'
-                : 'border-white/60 bg-transparent'
-            }`}
-          >
-            {aligned && (
-              <svg className="absolute inset-0 -rotate-90 h-full w-full p-0.5" viewBox="0 0 36 36">
-                <path
-                  className="text-green-400"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="3.5"
-                  strokeLinecap="round"
-                  strokeDasharray={`${dwellProgress * 100}, 100`}
-                  d="M18 2.0845
-                    a 15.9155 15.9155 0 0 1 0 31.831
-                    a 15.9155 15.9155 0 0 1 0 -31.831"
-                />
-              </svg>
-            )}
-            <div className={`h-3 w-3 rounded-full transition-colors ${aligned ? 'bg-green-400' : 'bg-white/50'}`} />
-            {!hasCompass && <span className="absolute text-[10px] font-semibold text-white">TAP</span>}
-          </div>
+          {/* Boundaries labels */}
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold tracking-widest text-white/30">UP / CEILING</div>
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold tracking-widest text-white/30">DOWN / FLOOR</div>
+          <div className="absolute left-2 top-[30%] text-[10px] font-bold tracking-widest text-white/30 vertical-text" style={{ writingMode: 'vertical-lr' }}>LEFT OVERLAP</div>
+          <div className="absolute right-2 top-[30%] text-[10px] font-bold tracking-widest text-white/30 vertical-text" style={{ writingMode: 'vertical-lr' }}>RIGHT OVERLAP</div>
         </div>
 
-        {hasCompass && (posError || rejected || directionHint) && (
-          <div
-            className={`absolute left-1/2 top-[63%] w-[90%] text-center -translate-x-1/2 rounded-full px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm ${
-              posError || rejected ? 'bg-amber-600/80' : 'bg-black/55'
-            }`}
-          >
-            {posError ?? rejected ?? directionHint}
-          </div>
-        )}
+        {/* Static targets: Left, Center, Right dots */}
+        <div className="absolute inset-0 flex justify-between items-center px-[10%]">
+          {[0, 1, 2].map((idx) => {
+            const isActive = activeDotIndex === idx;
+            const label = idx === 0 ? 'LEFT' : idx === 1 ? 'CENTER' : 'RIGHT';
+            return (
+              <div 
+                key={idx} 
+                className="flex flex-col items-center justify-center space-y-2"
+                style={{
+                  width: '60px',
+                }}
+              >
+                <div
+                  className={`rounded-full transition-all duration-300 ${
+                    isActive 
+                      ? 'w-10 h-10 bg-green-500 border-4 border-white shadow-[0_0_15px_rgba(34,197,94,0.8)] scale-110' 
+                      : 'w-7 h-7 bg-white/30 border-2 border-white/20 scale-100'
+                  }`}
+                />
+                <span 
+                  className={`text-[9px] font-bold tracking-wider ${
+                    isActive ? 'text-green-400' : 'text-white/40'
+                  }`}
+                >
+                  {label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Floating guidance banner */}
+        <div className="absolute left-1/2 top-4 w-[90%] -translate-x-1/2 rounded-xl bg-slate-950/80 backdrop-blur-md px-4 py-3 text-center border border-slate-800">
+          <div className="text-xs font-bold uppercase tracking-wider text-green-400">{guidance.face} FACE</div>
+          <div className="text-[10px] text-white/50">{guidance.step}</div>
+          {guidance.turn && (
+            <div className="mt-1.5 text-sm font-semibold text-white leading-tight animate-pulse">{guidance.turn}</div>
+          )}
+          {guidance.target && (
+            <div className="mt-1 text-xs text-slate-300">{guidance.target}</div>
+          )}
+        </div>
       </div>
 
-      <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
+      {/* Control Buttons */}
+      <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3 pointer-events-none mt-24">
+        {/* Undo button */}
         <button
           onClick={onUndo}
           disabled={count === 0 || busy}
-          className="grid h-9 w-9 place-items-center rounded-full bg-white/15 backdrop-blur-sm text-white disabled:opacity-30"
+          className="pointer-events-auto grid h-10 w-10 place-items-center rounded-full bg-slate-950/70 border border-slate-800 text-white disabled:opacity-30 active:scale-95 transition-transform"
           aria-label="Undo last shot"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="1 4 1 10 7 10" />
             <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
           </svg>
         </button>
+
+        {/* Cancel button */}
         <button
           onClick={onCancel}
-          className="grid h-9 w-9 place-items-center rounded-full bg-red-500/80 backdrop-blur-sm text-white"
+          className="pointer-events-auto grid h-10 w-10 place-items-center rounded-full bg-red-500/80 border border-red-600 text-white active:scale-95 transition-transform"
           aria-label="Cancel capture"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
@@ -840,36 +438,51 @@ export function GuidedCapture({
         </button>
       </div>
 
-      <div className="absolute inset-x-0 bottom-0 space-y-2 bg-gradient-to-t from-black/90 to-transparent p-4 pt-8">
+      {/* Capture bottom tray */}
+      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950 via-slate-950/90 to-transparent p-4 pt-12 space-y-4">
+        
+        {/* Progress bar */}
         <div className="flex items-center gap-3">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/10">
             <div
               className="h-full rounded-full bg-green-500 transition-[width] duration-300"
               style={{ width: `${(count / TOTAL_SHOTS) * 100}%` }}
             />
           </div>
           <span className="min-w-[5ch] text-right text-xs font-semibold tabular-nums text-white">
-            {count} of {TOTAL_SHOTS}
+            {count}/{TOTAL_SHOTS}
           </span>
         </div>
 
-        <div className="flex gap-3">
-          {!hasCompass && !done && (
-            <button
-              onClick={takeManualShot}
-              disabled={busy}
-              className="flex-1 rounded-xl border border-white/40 px-5 py-2.5 font-medium text-white active:bg-white/10"
-            >
-              Capture photo
-            </button>
-          )}
+        {/* Action button row */}
+        <div className="flex items-center justify-between gap-4">
+          
           <button
             onClick={() => setCapturePhase('review')}
             disabled={count < 4 || busy}
-            className="flex-1 rounded-xl bg-green-500 px-5 py-2.5 font-medium text-white disabled:opacity-40"
+            className="flex-1 rounded-xl bg-slate-800/80 border border-slate-700/50 py-3 font-semibold text-slate-300 disabled:opacity-40 disabled:pointer-events-none active:bg-slate-700 text-xs"
           >
-            Finish early ({count})
+            Finish Early ({count})
           </button>
+
+          {/* Center main shutter button */}
+          <div className="flex-1 flex justify-center">
+            <button
+              onClick={takeManualShot}
+              disabled={busy || count >= TOTAL_SHOTS}
+              className="w-16 h-16 rounded-full bg-white border-4 border-slate-800 shadow-2xl flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform"
+              aria-label="Capture Photo"
+            >
+              <div className="w-12 h-12 rounded-full bg-red-600 hover:bg-red-700 flex items-center justify-center">
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+            </button>
+          </div>
+
+          <div className="flex-1" />
         </div>
       </div>
     </div>
