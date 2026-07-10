@@ -39,9 +39,11 @@ export const TOTAL_SHOTS = buildTargets().length;
 const TOLERANCE_DEG = 8;
 /** Must remain aligned for this long before auto-capture fires. */
 const CAPTURE_DWELL_MS = 300;
-/** Half-angles of the on-screen guidance viewport. */
-const H_FOV = 55;
-const V_FOV = 45;
+/** Targets further off-axis than this get no dot — they are behind you. */
+const MAX_DOT_BEARING_DEG = 120;
+/** Where the eight direction anchors sit, as a percentage of the frame. */
+const DOT_RADIUS_X = 42;
+const DOT_RADIUS_Y = 30;
 
 export interface CapturedShot {
   blob: Blob;
@@ -251,8 +253,15 @@ export function GuidedCapture({
   }, [captureOrder, taken]);
 
   /**
-   * Project ALL 16 targets onto the screen using true 3D perspective projection.
-   * Dots that are off-screen or behind the camera are clamped to screen edges.
+   * Dots are direction indicators pinned to fixed screen positions, not
+   * perspective-projected world points.
+   *
+   * Each remaining target is reduced to a bearing (which way you must turn to
+   * reach it) and snapped to one of eight anchors around the frame. A dot
+   * therefore stays put while you pan — it marks "there is a shot this way",
+   * and you rotate until that target lands under the centre reticle. Projecting
+   * the dots into the scene instead makes them drift with the camera, which is
+   * something you chase rather than aim at.
    */
   const { dots, current } = useMemo((): {
     dots: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }>;
@@ -261,61 +270,42 @@ export function GuidedCapture({
     if (!orient || baseYawRef.current == null) return { dots: [], current: null };
     const base = baseYawRef.current;
 
-    if (nextTargetIndex == null && !done) return { dots: [], current: null };
-
-    const visible: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }> = [];
     let currentTarget: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
-
-    // Camera orientation in radians
-    const cy = (orient.yaw * Math.PI) / 180;
-    const cp = (orient.pitch * Math.PI) / 180;
-
-    // Camera Forward vector (Z)
-    const fz_x = Math.cos(cp) * Math.sin(cy);
-    const fz_y = Math.sin(cp);
-    const fz_z = Math.cos(cp) * Math.cos(cy);
-
-    // Camera Right vector (X)
-    const rx = Math.cos(cy);
-    const rz = -Math.sin(cy);
-
-    // Camera Up vector (Y)
-    const ux = fz_y * rz - fz_z * 0;
-    const uy = fz_z * rx - fz_x * rz;
-    const uz = fz_x * 0 - fz_y * rx;
-
-    const hScale = Math.tan((H_FOV / 2) * Math.PI / 180);
-    const vScale = Math.tan((V_FOV / 2) * Math.PI / 180);
+    // One dot per anchor: the closest target pointing that way wins.
+    const byAnchor = new Map<number, { index: number; dist: number; isTaken: boolean }>();
 
     targets.forEach((t, index) => {
-      const tYawTrue = (base + t.yaw) % 360;
-      const dYaw = angleDelta(orient.yaw, tYawTrue);
+      const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
       const dPitch = t.pitch - orient.pitch;
       const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
 
       if (index === nextTargetIndex) currentTarget = { index, dist, dYaw, dPitch };
 
-      const ty = (tYawTrue * Math.PI) / 180;
-      const tp = (t.pitch * Math.PI) / 180;
+      // A target under the reticle is shown by the reticle itself, not a dot.
+      if (dist <= TOLERANCE_DEG) return;
+      // Ignore targets behind you; the frame only has room for nearby bearings.
+      if (dist > MAX_DOT_BEARING_DEG) return;
 
-      const tx3 = Math.cos(tp) * Math.sin(ty);
-      const ty3 = Math.sin(tp);
-      const tz3 = Math.cos(tp) * Math.cos(ty);
+      // Bearing: 0° = right, 90° = up. Snap to the nearest of eight anchors.
+      const bearing = Math.atan2(dPitch, dYaw);
+      const anchor = ((Math.round(bearing / (Math.PI / 4)) % 8) + 8) % 8;
 
-      const localZ = tx3 * fz_x + ty3 * fz_y + tz3 * fz_z;
-      const localX = tx3 * rx + ty3 * 0 + tz3 * rz;
-      const localY = tx3 * ux + ty3 * uy + tz3 * uz;
+      const existing = byAnchor.get(anchor);
+      if (!existing || dist < existing.dist) {
+        byAnchor.set(anchor, { index, dist, isTaken: taken[index] });
+      }
+    });
 
-      // Targets are anchored in the world: a dot sits where its direction
-      // projects, and simply leaves the screen when you look away. Clamping it
-      // to the edge would make it slide around and stop being a fixed target.
-      if (localZ <= 0.01) return; // behind the camera
-
-      const screenX = 50 + (localX / localZ / hScale) * 50;
-      const screenY = 50 - (localY / localZ / vScale) * 50;
-      if (screenX < 2 || screenX > 98 || screenY < 2 || screenY > 98) return;
-
-      visible.push({ index, x: screenX, y: screenY, dist, isTaken: taken[index] });
+    const visible = [...byAnchor.entries()].map(([anchor, v]) => {
+      const a = (anchor * Math.PI) / 4;
+      // Ellipse so the dots hug the edges of a portrait frame.
+      return {
+        index: v.index,
+        x: 50 + Math.cos(a) * DOT_RADIUS_X,
+        y: 50 - Math.sin(a) * DOT_RADIUS_Y,
+        dist: v.dist,
+        isTaken: v.isTaken,
+      };
     });
 
     return { dots: visible, current: currentTarget };
