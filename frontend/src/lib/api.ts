@@ -1,15 +1,9 @@
-import type {
-  Project,
-  StatusResponse,
-  UploadResponse,
-  ViewerMetadata,
-} from '@/types';
+import type { CaptureResponse, Project, StatusResponse, ViewerMetadata } from '@/types';
 
 const API_OVERRIDE_KEY = 'inview3d.apiBaseUrl';
 
 /** Build-time default; may be overridden at runtime (see {@link getApiBaseUrl}). */
-const BUILD_TIME_API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+const BUILD_TIME_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
 
 /**
  * Resolves the backend base URL at runtime.
@@ -63,59 +57,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   /**
-   * Upload a video with progress. Uses XHR because fetch cannot report
-   * upload progress. Resolves with the created project summary.
-   */
-  uploadVideo(
-    file: File,
-    onProgress?: (percent: number) => void,
-    signal?: AbortSignal,
-  ): Promise<UploadResponse> {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      const form = new FormData();
-      form.append('video', file);
-
-      xhr.open('POST', `${getApiBaseUrl()}/upload`);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) {
-          onProgress(Math.round((e.loaded / e.total) * 100));
-        }
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText) as UploadResponse);
-        } else {
-          let message = `Upload failed (${xhr.status})`;
-          try {
-            const body = JSON.parse(xhr.responseText);
-            const m = body?.message;
-            message = Array.isArray(m) ? m.join(', ') : (m ?? message);
-          } catch {
-            /* ignore */
-          }
-          reject(new ApiError(message, xhr.status));
-        }
-      };
-      xhr.onerror = () => reject(new ApiError('Network error during upload', 0));
-      xhr.onabort = () => reject(new ApiError('Upload canceled', 0));
-      if (signal) {
-        signal.addEventListener('abort', () => xhr.abort());
-      }
-      xhr.send(form);
-    });
-  },
-
-  /**
    * Upload a guided capture. Photos must be appended in capture order — the
-   * stitcher relies on consecutive shots overlapping.
+   * stitcher matches consecutive shots.
    */
   uploadCapture(
     photos: Blob[],
     name: string,
     onProgress?: (percent: number) => void,
     signal?: AbortSignal,
-  ): Promise<{ id: string; kind: 'panorama'; photoCount: number }> {
+  ): Promise<CaptureResponse> {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       const form = new FormData();
@@ -128,7 +78,7 @@ export const api = {
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
+          resolve(JSON.parse(xhr.responseText) as CaptureResponse);
         } else {
           let message = `Upload failed (${xhr.status})`;
           try {
@@ -154,9 +104,6 @@ export const api = {
   deleteProject: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/project/${id}`, { method: 'DELETE' }),
 
-  /** Absolute URL of the generated GLB for a completed mesh project. */
-  modelUrl: (id: string) => `${getApiBaseUrl()}/model/${id}`,
-
-  /** Absolute URL of the stitched photosphere for a completed panorama project. */
+  /** Absolute URL of the stitched photosphere for a completed project. */
   panoramaUrl: (id: string) => `${getApiBaseUrl()}/panorama/${id}`,
 };

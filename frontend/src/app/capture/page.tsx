@@ -44,7 +44,7 @@ export default function CapturePage() {
   };
 
   const addShot = useCallback((shot: CapturedShot) => {
-    setShots((prev) => (prev.length >= 16 ? prev : [...prev, shot]));
+    setShots((prev) => [...prev, shot]);
   }, []);
 
   const undo = useCallback(() => setShots((prev) => prev.slice(0, -1)), []);
@@ -70,8 +70,8 @@ export default function CapturePage() {
         <div>
           <h1 className="text-3xl font-bold">Capture a photosphere</h1>
           <p className="mt-2 text-slate-400">
-            Stand in one spot and slowly rotate. We&apos;ll take 16 photos automatically and stitch
-            them into an explorable 360° view.
+            Stand in one spot and slowly rotate your phone across the whole sphere.
+            Guide circles show exactly where to aim — photos are taken automatically when you align.
           </p>
         </div>
 
@@ -81,15 +81,16 @@ export default function CapturePage() {
             walk.
           </li>
           <li>
-            <strong className="text-white">2.</strong> Hold the phone upright and rotate slowly.
+            <strong className="text-white">2.</strong> Hold the phone upright and rotate slowly in
+            all directions.
           </li>
           <li>
-            <strong className="text-white">3.</strong> Each photo is taken automatically when you
-            reach the next angle.
+            <strong className="text-white">3.</strong> Aim at each white circle — it auto-captures
+            when you align.
           </li>
           <li>
-            <strong className="text-white">4.</strong> Keep textured surfaces in view — blank walls
-            can&apos;t be matched.
+            <strong className="text-white">4.</strong> Cover all rings (equator, up, down) for a
+            full sphere.
           </li>
         </ol>
 

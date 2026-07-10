@@ -1,60 +1,23 @@
 # ===========================================================================
 # InView3D backend image
 #
-# Bundles the full classical-photogrammetry toolchain so the pipeline runs
-# self-contained: FFmpeg, COLMAP, OpenMVS, Python (trimesh) and Node 20.
-#
-# NOTE: This is a CPU build. COLMAP dense stereo is far faster on GPU; for
-# production, base this on an NVIDIA CUDA image and a GPU-enabled COLMAP.
+# The photosphere pipeline needs only Python + OpenCV (classical stitching) and
+# Node for the API. No COLMAP, no OpenMVS, no FFmpeg — the old video->mesh
+# pipeline is gone, and with it a ~40 minute source build.
 # ===========================================================================
-FROM ubuntu:22.04 AS toolchain
+FROM node:20-bookworm-slim AS toolchain
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=UTC
 
-# ---- System deps + FFmpeg + COLMAP (from Ubuntu repos) --------------------
+# opencv-python-headless still needs a couple of runtime shared libraries.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git build-essential cmake \
-    ffmpeg colmap \
     python3 python3-pip \
-    # OpenMVS build deps
-    libcgal-dev libboost-all-dev libopencv-dev libglu1-mesa-dev \
-    libglew-dev libeigen3-dev libnanoflann-dev libtinyxml2-dev zlib1g-dev \
+    libglib2.0-0 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Ubuntu 22.04 ships CMake 3.22, but current OpenMVS requires a newer CMake.
-# Install an up-to-date CMake from pip (lands in /usr/local/bin, ahead on PATH).
-RUN pip3 install --no-cache-dir "cmake>=3.28"
-
-# ---- Build OpenMVS (VCGLib + OpenMVS) -------------------------------------
-WORKDIR /opt
-# Pinned to v2.3.0 deliberately: OpenMVS master added a `libs/SFM` module that
-# pulls in PoseLib, TinyNPY, TinyEXIF and nanoflann, none of which are packaged.
-# v2.3.0 has no libs/SFM and builds against the apt deps above, and still ships
-# every binary this pipeline uses (InterfaceCOLMAP, DensifyPointCloud,
-# ReconstructMesh, TextureMesh).
-#
-# Out-of-source build into a distinct dir (the repo already ships a `build/`),
-# with CUDA disabled for this CPU-only image.
-RUN git clone --depth 1 https://github.com/cdcseacave/VCG.git vcglib && \
-    git clone --depth 1 -b v2.3.0 https://github.com/cdcseacave/openMVS.git openMVS && \
-    cmake -S openMVS -B openMVS_build \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DVCG_ROOT=/opt/vcglib \
-      -DOpenMVS_USE_CUDA=OFF && \
-    cmake --build openMVS_build --target install -j2 && \
-    rm -rf /opt/openMVS_build
-
-# OpenMVS binaries install to /usr/local/bin/OpenMVS
-ENV OPENMVS_BIN_DIR=/usr/local/bin/OpenMVS
-
-# ---- Node.js 20 -----------------------------------------------------------
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
-
-# ---- Python GLB conversion deps -------------------------------------------
 COPY processing/python/requirements.txt /opt/inview3d/processing/python/requirements.txt
-RUN pip3 install --no-cache-dir -r /opt/inview3d/processing/python/requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages \
+    -r /opt/inview3d/processing/python/requirements.txt
 
 # ===========================================================================
 # Build the backend
@@ -62,7 +25,6 @@ RUN pip3 install --no-cache-dir -r /opt/inview3d/processing/python/requirements.
 FROM toolchain AS build
 WORKDIR /app
 
-# Install backend deps (use backend package.json only for a smaller context)
 COPY backend/package.json backend/package-lock.json* ./backend/
 RUN cd backend && npm install
 COPY backend ./backend

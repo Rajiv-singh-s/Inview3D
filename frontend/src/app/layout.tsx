@@ -4,9 +4,9 @@ import './globals.css';
 import { QueryProvider } from '@/lib/query-provider';
 
 export const metadata: Metadata = {
-  title: 'InView3D — Video to interactive 3D',
+  title: 'InView3D — 360° Photosphere Capture',
   description:
-    'Turn an indoor walkthrough video into an explorable browser-based 3D environment using classical photogrammetry.',
+    'Capture and explore interactive 360° photospheres from your phone.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -27,9 +27,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <Link href="/capture" className="hover:text-white">
                     Capture
                   </Link>
-                  <Link href="/upload" className="hover:text-white">
-                    Upload
-                  </Link>
                   <Link href="/projects" className="hover:text-white">
                     Projects
                   </Link>
@@ -38,7 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </header>
             <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">{children}</main>
             <footer className="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500">
-              InView3D · Phase 1 MVP · Classical photogrammetry (COLMAP + OpenMVS)
+              InView3D · 360° Photosphere Capture
             </footer>
           </div>
         </QueryProvider>

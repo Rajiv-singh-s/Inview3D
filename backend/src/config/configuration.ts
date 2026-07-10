@@ -11,18 +11,15 @@ export interface AppConfig {
   corsOrigin: string;
   uploadPath: string;
   outputPath: string;
-  maxUploadSize: number;
-  maxDurationSeconds: number;
-  frameIntervalSeconds: number;
-  maxFrames: number;
-  processingThreads: number;
+  /** Maximum size of a single captured photo, in bytes. */
+  maxPhotoSize: number;
+  /** Maximum photos accepted in one capture. */
+  maxPhotos: number;
+  /** Longest side each photo is downscaled to before stitching. */
+  stitchMaxDim: number;
+  /** Upper bound on the stitched equirectangular width, in pixels. */
+  panoramaMaxWidth: number;
   pipelineScriptsDir: string;
-  bin: {
-    ffmpeg: string;
-    ffprobe: string;
-    colmap: string;
-    openmvsDir: string;
-  };
   redis: {
     host: string;
     port: number;
@@ -33,12 +30,6 @@ export interface AppConfig {
 function toInt(value: string | undefined, fallback: number): number {
   const n = Number.parseInt(value ?? '', 10);
   return Number.isFinite(n) ? n : fallback;
-}
-
-/** Frame interval may be fractional (e.g. 0.5s => 2 fps), so parse as float. */
-function toFloat(value: string | undefined, fallback: number): number {
-  const n = Number.parseFloat(value ?? '');
-  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function resolvePath(value: string | undefined, fallback: string): string {
@@ -52,23 +43,16 @@ export default (): { app: AppConfig } => {
 
   return {
     app: {
-      // Railway/hosted platforms inject $PORT; honor it, else BACKEND_PORT.
+      // Hosted platforms inject $PORT; honor it, else BACKEND_PORT.
       backendPort: toInt(process.env.BACKEND_PORT ?? process.env.PORT, 4000),
       corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
       uploadPath: resolvePath(process.env.UPLOAD_PATH, path.join(repoRoot, 'uploads')),
       outputPath: resolvePath(process.env.OUTPUT_PATH, path.join(repoRoot, 'output')),
-      maxUploadSize: toInt(process.env.MAX_UPLOAD_SIZE, 2 * 1024 * 1024 * 1024),
-      maxDurationSeconds: toInt(process.env.MAX_DURATION_SECONDS, 300),
-      frameIntervalSeconds: toFloat(process.env.FRAME_INTERVAL_SECONDS, 0.5),
-      maxFrames: toInt(process.env.MAX_FRAMES, 300),
-      processingThreads: toInt(process.env.PROCESSING_THREADS, 0),
+      maxPhotoSize: toInt(process.env.MAX_PHOTO_SIZE, 20 * 1024 * 1024),
+      maxPhotos: toInt(process.env.MAX_PHOTOS, 64),
+      stitchMaxDim: toInt(process.env.STITCH_MAX_DIM, 1600),
+      panoramaMaxWidth: toInt(process.env.PANORAMA_MAX_WIDTH, 8192),
       pipelineScriptsDir: resolvePath(process.env.PIPELINE_SCRIPTS_DIR, defaultScripts),
-      bin: {
-        ffmpeg: process.env.FFMPEG_BIN ?? 'ffmpeg',
-        ffprobe: process.env.FFPROBE_BIN ?? 'ffprobe',
-        colmap: process.env.COLMAP_BIN ?? 'colmap',
-        openmvsDir: process.env.OPENMVS_BIN_DIR ?? '',
-      },
       redis: {
         host: process.env.REDIS_HOST ?? '127.0.0.1',
         port: toInt(process.env.REDIS_PORT, 6379),

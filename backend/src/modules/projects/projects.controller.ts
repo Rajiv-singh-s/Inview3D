@@ -1,34 +1,13 @@
-import {
-  Controller,
-  Delete,
-  Get,
-  Header,
-  NotFoundException,
-  Param,
-  Res,
-  StreamableFile,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import type { Response } from 'express';
-import * as fs from 'fs';
-import * as path from 'path';
-import { AppConfig } from '../../config/configuration';
+import { Controller, Delete, Get, NotFoundException, Param } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 
 /**
- * REST surface for project listing, details, status polling, viewer metadata
- * and GLB download. Upload lives in its own module.
+ * Project listing, details, status polling and viewer metadata.
+ * Capture upload and photosphere delivery live in PanoramaController.
  */
 @Controller()
 export class ProjectsController {
-  private readonly outputPath: string;
-
-  constructor(
-    private readonly projects: ProjectsService,
-    config: ConfigService,
-  ) {
-    this.outputPath = config.getOrThrow<AppConfig>('app').outputPath;
-  }
+  constructor(private readonly projects: ProjectsService) {}
 
   /** GET /projects — list all projects (newest first). */
   @Get('projects')
@@ -57,55 +36,26 @@ export class ProjectsController {
   }
 
   /**
-   * GET /viewer/:id — metadata the viewer needs. The shape depends on `kind`:
-   * a mesh project yields a GLB url, a panorama project a photosphere url plus
-   * its aspect ratio (a partial rotation is not a full 2:1 equirectangular).
+   * GET /viewer/:id — metadata the photosphere viewer needs. `width`/`height`
+   * let the client confirm the image is a 2:1 equirectangular before mapping it
+   * onto a sphere.
    */
   @Get('viewer/:id')
   viewer(@Param('id') id: string) {
     const p = this.projects.findOne(id);
-    if (p.status !== 'completed') {
-      throw new NotFoundException('This project is not ready yet');
+    if (p.status !== 'completed' || !p.panoramaPath) {
+      throw new NotFoundException('This photosphere is not ready yet');
     }
-
-    const base = {
+    return {
       id: p.id,
-      kind: p.kind,
       originalName: p.originalName,
+      panoramaUrl: `/panorama/${p.id}`,
+      panoramaSizeBytes: p.panoramaSizeBytes,
+      width: p.panoramaWidth,
+      height: p.panoramaHeight,
+      photoCount: p.photoCount,
       completedAt: p.updatedAt,
     };
-
-    if (p.kind === 'panorama') {
-      if (!p.panoramaPath) throw new NotFoundException('Panorama is not ready for this project');
-      return {
-        ...base,
-        panoramaUrl: `/panorama/${p.id}`,
-        panoramaSizeBytes: p.panoramaSizeBytes,
-        width: p.panoramaWidth,
-        height: p.panoramaHeight,
-        photoCount: p.photoCount,
-      };
-    }
-
-    if (!p.glbPath) throw new NotFoundException('Model is not ready for this project yet');
-    return {
-      ...base,
-      videoInfo: p.videoInfo,
-      modelUrl: `/model/${p.id}`,
-      glbSizeBytes: p.glbSizeBytes,
-    };
-  }
-
-  /** GET /model/:id — stream the generated GLB. */
-  @Get('model/:id')
-  @Header('Content-Type', 'model/gltf-binary')
-  model(@Param('id') id: string, @Res({ passthrough: true }) res: Response): StreamableFile {
-    const p = this.projects.findOne(id);
-    if (!p.glbPath) throw new NotFoundException('No model available for this project');
-    const abs = path.join(this.outputPath, p.glbPath);
-    if (!fs.existsSync(abs)) throw new NotFoundException('Model file is missing on disk');
-    res.set('Content-Disposition', `inline; filename="${id}.glb"`);
-    return new StreamableFile(fs.createReadStream(abs));
   }
 
   /** DELETE /project/:id — remove record and all artifacts. */

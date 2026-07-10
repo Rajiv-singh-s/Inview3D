@@ -48,7 +48,6 @@ export class PanoramaController {
     const project = await this.capture.handleCapture(photos, name);
     return {
       id: project.id,
-      kind: project.kind,
       status: project.status,
       photoCount: project.photoCount,
       originalName: project.originalName,

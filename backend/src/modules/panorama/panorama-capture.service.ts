@@ -4,7 +4,7 @@ import * as path from 'path';
 import { Project } from '../../common/interfaces';
 import { PanoramaService } from '../../pipeline/panorama.service';
 import { ProjectsService } from '../projects/projects.service';
-import { ReconstructionQueue } from '../queue/reconstruction.queue';
+import { StitchQueue } from '../queue/stitch.queue';
 
 /** Minimum photos the guided capture must produce before we bother stitching. */
 const MIN_PHOTOS = 4;
@@ -23,7 +23,7 @@ export class PanoramaCaptureService {
   constructor(
     private readonly projects: ProjectsService,
     private readonly panorama: PanoramaService,
-    private readonly queue: ReconstructionQueue,
+    private readonly queue: StitchQueue,
   ) {}
 
   async handleCapture(files: Express.Multer.File[], name?: string): Promise<Project> {
@@ -34,7 +34,6 @@ export class PanoramaCaptureService {
     }
 
     const project = this.projects.create({
-      kind: 'panorama',
       originalName: name?.trim() || `Capture ${new Date().toLocaleString()}`,
       originalPath: '',
       photoCount: files.length,
@@ -48,7 +47,7 @@ export class PanoramaCaptureService {
     });
 
     this.projects.update(project.id, { originalPath: ws.photos, status: 'queued' });
-    await this.queue.enqueue(project.id, 'panorama');
+    await this.queue.enqueue(project.id);
     this.logger.log(`Panorama project ${project.id} queued with ${files.length} photos`);
 
     return this.projects.findOne(project.id);

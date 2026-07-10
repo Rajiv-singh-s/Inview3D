@@ -5,14 +5,9 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { VideoInfoPanel } from '@/components/ui/VideoInfoPanel';
 import { formatBytes } from '@/lib/format';
 
-// Both viewers need WebGL — render client-side only.
-const ModelViewer = dynamic(
-  () => import('@/components/viewer/ModelViewer').then((m) => m.ModelViewer),
-  { ssr: false, loading: () => <ViewerSkeleton /> },
-);
+// Photosphere viewer needs WebGL — render client-side only.
 const PhotosphereViewer = dynamic(
   () => import('@/components/viewer/PhotosphereViewer').then((m) => m.PhotosphereViewer),
   { ssr: false, loading: () => <ViewerSkeleton /> },
@@ -52,50 +47,27 @@ export default function ViewerPage({ params }: { params: Promise<{ id: string }>
     );
   }
 
-  const isPanorama = data.kind === 'panorama';
-
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{data.originalName}</h1>
           <p className="text-sm text-slate-400">
-            {isPanorama
-              ? `Photosphere · ${data.photoCount ?? '?'} photos · ${formatBytes(data.panoramaSizeBytes)}`
-              : `Reconstructed mesh · ${formatBytes(data.glbSizeBytes)} GLB`}
+            Photosphere · {data.photoCount ?? '?'} photos
+            {data.panoramaSizeBytes ? ` · ${formatBytes(data.panoramaSizeBytes)}` : ''}
           </p>
         </div>
         <div className="flex gap-3">
-          <a
-            href={isPanorama ? api.panoramaUrl(id) : api.modelUrl(id)}
-            download
-            className="btn-ghost"
-          >
-            {isPanorama ? 'Download panorama' : 'Download GLB'}
+          <a href={api.panoramaUrl(id)} download className="btn-ghost">
+            Download panorama
           </a>
-          <Link href={isPanorama ? '/capture' : '/upload'} className="btn-primary">
+          <Link href="/capture" className="btn-primary">
             New capture
           </Link>
         </div>
       </div>
 
-      {isPanorama ? (
-        <PhotosphereViewer url={api.panoramaUrl(id)} />
-      ) : (
-        <>
-          <ModelViewer url={api.modelUrl(id)} />
-          <p className="text-center text-xs text-slate-500">
-            Drag to orbit · Scroll to zoom · Right-click drag to pan
-          </p>
-        </>
-      )}
-
-      {!isPanorama && data.videoInfo && (
-        <div className="card p-6">
-          <h2 className="mb-4 text-lg font-semibold">Source video</h2>
-          <VideoInfoPanel info={data.videoInfo} />
-        </div>
-      )}
+      <PhotosphereViewer url={api.panoramaUrl(id)} />
     </div>
   );
 }

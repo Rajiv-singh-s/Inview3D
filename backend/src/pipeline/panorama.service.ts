@@ -103,7 +103,17 @@ export class PanoramaService {
   private stitch(ws: PanoramaWorkspace, panoPath: string, log: ProjectLogger): Promise<void> {
     fs.mkdirSync(path.dirname(panoPath), { recursive: true });
     const script = path.join(this.app.pipelineScriptsDir, '..', 'python', 'stitch_panorama.py');
-    const args = [script, '--input', ws.photos, '--output', panoPath];
+    const args = [
+      script,
+      '--input',
+      ws.photos,
+      '--output',
+      panoPath,
+      '--max-dim',
+      String(this.app.stitchMaxDim),
+      '--max-width',
+      String(this.app.panoramaMaxWidth),
+    ];
     return runCommand('python3', args, log).catch((err) => {
       if (err instanceof CommandError && err.code === null) {
         return runCommand('python', args, log);
@@ -113,9 +123,9 @@ export class PanoramaService {
   }
 
   /**
-   * Records the stitched dimensions. The viewer needs the aspect ratio to decide
-   * how much of the sphere the panorama covers (a partial rotation will not be
-   * a full 2:1 equirectangular image).
+   * Records the stitched dimensions, which the stitcher writes alongside the
+   * image. The viewer checks these to confirm it received a 2:1 equirectangular
+   * before mapping it onto a sphere.
    */
   private async recordDimensions(
     projectId: string,
@@ -123,23 +133,21 @@ export class PanoramaService {
     log: ProjectLogger,
   ): Promise<void> {
     this.assertExists(panoPath, 'stitched panorama');
-    const { width, height } = await this.probeImage(panoPath);
+    const { width, height } = this.readDimensions(panoPath);
     this.projects.update(projectId, { panoramaWidth: width, panoramaHeight: height });
     log.info(`Panorama is ${width}x${height} (aspect ${(width / height).toFixed(2)})`);
   }
 
-  /** Reads image dimensions via FFprobe, which is already a hard dependency. */
-  private probeImage(file: string): Promise<{ width: number; height: number }> {
-    return new Promise((resolve, reject) => {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const ffmpeg = require('fluent-ffmpeg') as typeof import('fluent-ffmpeg');
-      ffmpeg.ffprobe(file, (err, data) => {
-        if (err) return reject(new Error(`Could not read panorama: ${err.message}`));
-        const s = data.streams?.find((x) => x.width && x.height);
-        if (!s?.width || !s?.height) return reject(new Error('Panorama has no dimensions'));
-        resolve({ width: s.width, height: s.height });
-      });
-    });
+  /** Reads the sidecar metadata emitted by `stitch_panorama.py`. */
+  private readDimensions(panoPath: string): { width: number; height: number } {
+    const sidecar = panoPath.replace(/\.jpg$/, '.json');
+    this.assertExists(sidecar, 'panorama metadata');
+    const meta = JSON.parse(fs.readFileSync(sidecar, 'utf8')) as {
+      width?: number;
+      height?: number;
+    };
+    if (!meta.width || !meta.height) throw new Error('Panorama metadata has no dimensions');
+    return { width: meta.width, height: meta.height };
   }
 
   private storeOutput(projectId: string, panoPath: string, log: ProjectLogger): Promise<void> {

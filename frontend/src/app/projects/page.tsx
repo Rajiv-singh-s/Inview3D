@@ -25,8 +25,8 @@ export default function ProjectsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Projects</h1>
-        <Link href="/upload" className="btn-primary">
-          New upload
+        <Link href="/capture" className="btn-primary">
+          New capture
         </Link>
       </div>
 
@@ -36,8 +36,8 @@ export default function ProjectsPage() {
       {data && data.length === 0 && (
         <div className="card p-10 text-center">
           <p className="text-slate-300">No projects yet.</p>
-          <Link href="/upload" className="btn-primary mt-4 inline-flex">
-            Upload your first video
+          <Link href="/capture" className="btn-primary mt-4 inline-flex">
+            Capture your first photosphere
           </Link>
         </div>
       )}
@@ -60,7 +60,7 @@ export default function ProjectsPage() {
             <div className="flex items-center justify-between text-sm text-slate-400">
               <span>
                 {new Date(project.createdAt).toLocaleString()}
-                {project.glbSizeBytes ? ` · ${formatBytes(project.glbSizeBytes)}` : ''}
+                {project.panoramaSizeBytes ? ` · ${formatBytes(project.panoramaSizeBytes)}` : ''}
               </span>
               <div className="flex gap-3">
                 {project.status === 'completed' ? (

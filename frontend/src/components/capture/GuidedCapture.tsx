@@ -1,18 +1,52 @@
-'use client';
+﻿'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-/** Number of shots around a full 360° rotation. */
-export const TOTAL_SHOTS = 16;
-/** Degrees between consecutive shots. */
-const STEP_DEG = 360 / TOTAL_SHOTS;
-/** How close to the target heading you must be before the shot is taken. */
-const TOLERANCE_DEG = 7;
+/**
+ * Targets tile the whole sphere: a dense middle ring plus sparser upper/lower
+ * rings (fewer shots are needed near the poles) plus single zenith/nadir shots.
+ */
+const RINGS: Array<{ pitch: number; count: number }> = [
+  { pitch: 90, count: 1 },
+  { pitch: 60, count: 6 },
+  { pitch: 30, count: 8 },
+  { pitch: 0, count: 12 },
+  { pitch: -30, count: 8 },
+  { pitch: -60, count: 6 },
+  { pitch: -90, count: 1 },
+];
+
+export interface Target {
+  yaw: number;
+  pitch: number;
+}
+
+function buildTargets(): Target[] {
+  const out: Target[] = [];
+  for (const ring of RINGS) {
+    if (ring.count === 1) {
+      out.push({ yaw: 0, pitch: ring.pitch });
+    } else {
+      for (let i = 0; i < ring.count; i++) {
+        out.push({ yaw: (360 / ring.count) * i, pitch: ring.pitch });
+      }
+    }
+  }
+  return out;
+}
+
+export const TOTAL_SHOTS = buildTargets().length;
+
+/** How close (degrees) the reticle must be to a target to auto-capture it. */
+const TOLERANCE_DEG = 8;
+/** Half-angles of the on-screen guidance viewport. */
+const H_FOV = 60;
+const V_FOV = 45;
 
 export interface CapturedShot {
   blob: Blob;
-  /** Compass heading at which this shot was taken, for debugging/ordering. */
-  heading: number;
+  yaw: number;
+  pitch: number;
 }
 
 /** Smallest signed angle from `a` to `b`, in (-180, 180]. */
@@ -30,13 +64,12 @@ interface GuidedCaptureProps {
 }
 
 /**
- * Guided 360° photo capture: the user stands still and rotates, and a shot is
- * taken automatically each time they reach the next target heading. Capture
- * order is preserved, which is what the stitcher relies on.
+ * Guided spherical photo capture. The user stands still and sweeps the phone
+ * across the sphere; each target is shot automatically when the reticle reaches
+ * it. A minimap shows overall sphere coverage at all times.
  *
- * Device orientation drives the guidance where available (mobile). On devices
- * without a compass we fall back to manual capture, since evenly-spaced shots
- * are a nicety, not a hard requirement for stitching.
+ * Undo is fully tracked: `capturedOrder[i]` records which target index was
+ * taken for shot `i`, so trimming `shots` via undo correctly un-marks targets.
  */
 export function GuidedCapture({
   shots,
@@ -49,16 +82,34 @@ export function GuidedCapture({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const capturingRef = useRef(false);
-  /** Heading of the first shot; all targets are measured from it. */
-  const baseHeadingRef = useRef<number | null>(null);
+  /** Compass heading anchored on first orientation event; target yaws are relative. */
+  const baseYawRef = useRef<number | null>(null);
+  /** Maps shot index -> target index, so undo can un-mark the correct target. */
+  const capturedOrderRef = useRef<number[]>([]);
+  /** Ref mirror of shots.length so async callbacks always read the current value. */
+  const shotsLengthRef = useRef(0);
+  shotsLengthRef.current = shots.length;
+
+  const targets = useMemo(buildTargets, []);
+
+  /** Which targets have been captured, derived from capturedOrder & shots.length. */
+  const taken = useMemo(() => {
+    const arr = targets.map(() => false);
+    capturedOrderRef.current.slice(0, shots.length).forEach((idx) => {
+      if (idx >= 0 && idx < arr.length) arr[idx] = true;
+    });
+    return arr;
+  }, [shots.length, targets]);
 
   const [error, setError] = useState<string | null>(null);
-  const [heading, setHeading] = useState<number | null>(null);
+  const [orient, setOrient] = useState<{ yaw: number; pitch: number } | null>(null);
   const [hasCompass, setHasCompass] = useState(false);
   const [ready, setReady] = useState(false);
+  /** Flash overlay when a shot is auto-captured. */
+  const [flash, setFlash] = useState(false);
 
-  const index = shots.length;
-  const done = index >= TOTAL_SHOTS;
+  const count = shots.length;
+  const done = taken.every(Boolean);
 
   // ---- camera ------------------------------------------------------------
   useEffect(() => {
@@ -92,57 +143,109 @@ export function GuidedCapture({
     };
   }, []);
 
-  // ---- compass -----------------------------------------------------------
+  // ---- orientation -------------------------------------------------------
   useEffect(() => {
     const onOrientation = (e: DeviceOrientationEvent) => {
-      // iOS exposes a true compass heading; elsewhere alpha is relative.
       const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number })
         .webkitCompassHeading;
-      const h = typeof webkit === 'number' ? webkit : e.alpha != null ? 360 - e.alpha : null;
-      if (h == null || Number.isNaN(h)) return;
+      const yawRaw = typeof webkit === 'number' ? webkit : e.alpha != null ? 360 - e.alpha : null;
+      if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return;
       setHasCompass(true);
-      setHeading(((h % 360) + 360) % 360);
+      const yaw = ((yawRaw % 360) + 360) % 360;
+      // beta is ~90 when the phone is upright; subtract to get pitch from horizon.
+      const pitch = Math.max(-90, Math.min(90, e.beta - 90));
+      setOrient({ yaw, pitch });
+      // Anchor base yaw on the very first orientation event.
+      if (baseYawRef.current == null) baseYawRef.current = yaw;
     };
     window.addEventListener('deviceorientation', onOrientation, true);
     return () => window.removeEventListener('deviceorientation', onOrientation, true);
   }, []);
 
-  const takeShot = useCallback(() => {
-    const video = videoRef.current;
-    if (!video || capturingRef.current || video.videoWidth === 0) return;
-    capturingRef.current = true;
+  const triggerFlash = useCallback(() => {
+    setFlash(true);
+    setTimeout(() => setFlash(false), 120);
+  }, []);
 
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext('2d')?.drawImage(video, 0, 0);
-    canvas.toBlob(
-      (blob) => {
-        if (blob) {
-          const h = heading ?? 0;
-          if (baseHeadingRef.current == null) baseHeadingRef.current = h;
-          onShot({ blob, heading: h });
-        }
-        // Brief cooldown so one alignment does not fire several shots.
-        setTimeout(() => (capturingRef.current = false), 600);
-      },
-      'image/jpeg',
-      0.92,
-    );
-  }, [heading, onShot]);
+  const takeShot = useCallback(
+    (targetIndex: number) => {
+      const video = videoRef.current;
+      if (!video || capturingRef.current || video.videoWidth === 0) return;
+      capturingRef.current = true;
 
-  // Target heading for the next shot, relative to the first one.
-  const targetHeading =
-    baseHeadingRef.current == null ? heading : (baseHeadingRef.current + index * STEP_DEG) % 360;
+      // Snapshot insertion slot before async blob encode. If undo fires during
+      // encoding this ensures the new shot overwrites the correct position.
+      const shotIndex = shotsLengthRef.current;
 
-  const delta = heading != null && targetHeading != null ? angleDelta(heading, targetHeading) : null;
-  const aligned = delta != null && Math.abs(delta) <= TOLERANCE_DEG;
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d')?.drawImage(video, 0, 0);
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            // Write at shotIndex, overwriting any stale entry from a previous undo.
+            capturedOrderRef.current = [...capturedOrderRef.current.slice(0, shotIndex), targetIndex];
+            onShot({ blob, yaw: orient?.yaw ?? 0, pitch: orient?.pitch ?? 0 });
+            triggerFlash();
+          }
+          setTimeout(() => (capturingRef.current = false), 400);
+        },
+        'image/jpeg',
+        0.92,
+      );
+    },
+    [onShot, orient, triggerFlash],
+  );
 
-  // Auto-capture once aligned with the next target.
+  /** Manual capture (no compass): find the first untaken target and record it. */
+  const takeManualShot = useCallback(() => {
+    const idx = targets.findIndex((_, i) => !taken[i]);
+    if (idx < 0) return;
+    takeShot(idx);
+  }, [targets, taken, takeShot]);
+
+  /** Screen-projected positions of remaining targets visible in the current viewport. */
+  const { dots, nearest } = useMemo((): {
+    dots: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }>;
+    nearest: { index: number; dist: number; dYaw: number; dPitch: number } | null;
+  } => {
+    if (!orient || baseYawRef.current == null) return { dots: [], nearest: null };
+    const base = baseYawRef.current;
+
+    let best: { index: number; dist: number; dYaw: number; dPitch: number } | null = null;
+    const visible: Array<{ index: number; x: number; y: number; dist: number; isTaken: boolean }> = [];
+
+    targets.forEach((t, index) => {
+      const dYaw = angleDelta(orient.yaw, (base + t.yaw) % 360);
+      const dPitch = t.pitch - orient.pitch;
+      const dist = Math.hypot(dYaw * Math.cos((orient.pitch * Math.PI) / 180), dPitch);
+
+      // Track nearest untaken target for guidance.
+      if (!taken[index] && (!best || dist < best.dist)) {
+        best = { index, dist, dYaw, dPitch };
+      }
+
+      // Only project targets that fall within the visible frustum.
+      if (Math.abs(dYaw) <= H_FOV && Math.abs(dPitch) <= V_FOV) {
+        visible.push({
+          index,
+          x: 50 + (dYaw / H_FOV) * 46,
+          y: 50 - (dPitch / V_FOV) * 43,
+          dist,
+          isTaken: taken[index],
+        });
+      }
+    });
+
+    return { dots: visible, nearest: best };
+  }, [orient, targets, taken]);
+
+  // Auto-capture: fire when the reticle aligns with the nearest untaken target.
   useEffect(() => {
-    if (!ready || done || busy || !hasCompass) return;
-    if (index === 0 || aligned) takeShot();
-  }, [ready, done, busy, hasCompass, aligned, index, takeShot]);
+    if (!ready || busy || done || !hasCompass) return;
+    if (nearest && nearest.dist <= TOLERANCE_DEG) takeShot(nearest.index);
+  }, [ready, busy, done, hasCompass, nearest, takeShot]);
 
   if (error) {
     return (
@@ -156,34 +259,77 @@ export function GuidedCapture({
     );
   }
 
+  const aligned = nearest != null && nearest.dist <= TOLERANCE_DEG;
+  const hint =
+    nearest == null
+      ? null
+      : Math.abs(nearest.dYaw) > Math.abs(nearest.dPitch)
+        ? nearest.dYaw > 0
+          ? 'Turn right â†’'
+          : 'â† Turn left'
+        : nearest.dPitch > 0
+          ? 'Tilt up â†‘'
+          : 'Tilt down â†“';
+
   return (
     <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl bg-black">
-      <video
-        ref={videoRef}
-        playsInline
-        muted
-        className="h-[70vh] w-full bg-black object-cover"
+      {/* Live camera feed */}
+      <video ref={videoRef} playsInline muted className="h-[65vh] w-full bg-black object-cover" />
+
+      {/* White-flash overlay on capture */}
+      <div
+        className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-75"
+        style={{ opacity: flash ? 0.6 : 0 }}
       />
 
-      {/* Framing guide */}
+      {/* AR overlay */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-x-8 inset-y-24 rounded-sm border border-white/40" />
+        {/* Guide frame */}
+        <div className="absolute inset-x-8 inset-y-20 rounded-sm border border-white/25" />
 
-        {/* Alignment reticle: fills green as you approach the target heading. */}
+        {/* All targets visible in the current viewport */}
+        {dots.map((d) => (
+          <div
+            key={d.index}
+            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full"
+            style={{
+              left: `${d.x}%`,
+              top: `${d.y}%`,
+              width: d.isTaken ? 18 : d.dist <= TOLERANCE_DEG ? 38 : 24,
+              height: d.isTaken ? 18 : d.dist <= TOLERANCE_DEG ? 38 : 24,
+              backgroundColor: d.isTaken
+                ? 'rgba(34,197,94,0.9)'
+                : d.dist <= TOLERANCE_DEG
+                  ? 'rgba(34,197,94,0.3)'
+                  : 'transparent',
+              border: d.isTaken
+                ? 'none'
+                : d.dist <= TOLERANCE_DEG
+                  ? '3px solid rgba(255,255,255,0.95)'
+                  : '2px solid rgba(255,255,255,0.55)',
+              boxShadow: d.dist <= TOLERANCE_DEG && !d.isTaken ? '0 0 0 6px rgba(255,255,255,0.25)' : 'none',
+              transition: 'all 0.12s',
+            }}
+          />
+        ))}
+
+        {/* Centre reticle */}
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           <div
-            className={`grid h-20 w-20 place-items-center rounded-full border-4 transition-colors ${
-              aligned ? 'border-white bg-green-500' : 'border-white/80 bg-transparent'
+            className={`grid h-16 w-16 place-items-center rounded-full border-4 transition-all duration-150 ${
+              aligned
+                ? 'scale-110 border-white bg-green-500/60'
+                : 'border-white/70 bg-transparent'
             }`}
           >
-            {!hasCompass && <span className="text-[10px] text-white/80">TAP</span>}
+            {!hasCompass && <span className="text-[10px] font-semibold text-white">TAP</span>}
           </div>
         </div>
 
-        {/* Direction hint */}
-        {hasCompass && delta != null && !aligned && (
-          <div className="absolute left-1/2 top-[62%] -translate-x-1/2 text-sm font-medium text-white/90">
-            Turn {delta > 0 ? 'right →' : '← left'}
+        {/* Directional hint */}
+        {hasCompass && hint && !aligned && (
+          <div className="absolute left-1/2 top-[62%] -translate-x-1/2 rounded-full bg-black/60 px-4 py-1.5 text-sm font-semibold text-white backdrop-blur-sm">
+            {hint}
           </div>
         )}
       </div>
@@ -192,55 +338,121 @@ export function GuidedCapture({
       <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
         <button
           onClick={onUndo}
-          disabled={index === 0 || busy}
+          disabled={count === 0 || busy}
           className="grid h-9 w-9 place-items-center rounded-full bg-white/90 text-slate-900 disabled:opacity-40"
           aria-label="Undo last shot"
         >
-          ↺
+          â†º
         </button>
         <button
           onClick={onCancel}
           className="grid h-9 w-9 place-items-center rounded-full bg-red-500 text-white"
           aria-label="Cancel capture"
         >
-          ✕
+          âœ•
         </button>
       </div>
 
-      {/* Bottom bar: progress + counter + actions */}
-      <div className="absolute inset-x-0 bottom-0 space-y-3 bg-gradient-to-t from-black/80 to-transparent p-4">
+      {/* Bottom panel */}
+      <div className="absolute inset-x-0 bottom-0 space-y-2 bg-gradient-to-t from-black/90 to-transparent p-4 pt-6">
+        {/* Sphere minimap */}
+        <SphereMinimap rings={RINGS} targets={targets} taken={taken} />
+
+        {/* Progress bar */}
         <div className="flex items-center gap-3">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/30">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/25">
             <div
-              className="h-full rounded-full bg-green-500 transition-[width]"
-              style={{ width: `${(index / TOTAL_SHOTS) * 100}%` }}
+              className="h-full rounded-full bg-green-500 transition-[width] duration-300"
+              style={{ width: `${(count / TOTAL_SHOTS) * 100}%` }}
             />
           </div>
-          <span className="text-sm font-medium tabular-nums text-white">
-            {index} of {TOTAL_SHOTS}
+          <span className="min-w-[4ch] text-right text-sm font-medium tabular-nums text-white">
+            {count}Â /Â {TOTAL_SHOTS}
           </span>
         </div>
 
+        {/* Action buttons */}
         <div className="flex gap-3">
           {!hasCompass && !done && (
-            <button onClick={takeShot} disabled={busy} className="btn-ghost flex-1 !text-white">
+            <button
+              onClick={takeManualShot}
+              disabled={busy}
+              className="flex-1 rounded-xl border border-white/40 px-5 py-2.5 font-medium text-white active:bg-white/10"
+            >
               Capture photo
             </button>
           )}
           <button
             onClick={onFinish}
-            disabled={index < 4 || busy}
+            disabled={count < 4 || busy}
             className="flex-1 rounded-xl bg-green-500 px-5 py-2.5 font-medium text-white disabled:opacity-40"
           >
-            {busy ? 'Uploading…' : done ? 'Finish' : `Finish (${index})`}
+            {busy ? 'Uploadingâ€¦' : done ? 'Finish' : `Finish early (${count})`}
           </button>
         </div>
+
         {!hasCompass && (
-          <p className="text-center text-[11px] text-white/70">
-            No compass detected — rotate a little between each shot, keeping ~50% overlap.
+          <p className="text-center text-[11px] text-white/60">
+            No compass â€” rotate a little between shots, keeping â‰ˆ50% overlap.
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sphere minimap
+// ---------------------------------------------------------------------------
+
+interface SphereMinimap {
+  rings: typeof RINGS;
+  targets: Target[];
+  taken: boolean[];
+}
+
+/** Small SVG grid showing all capture positions coloured by capture state. */
+function SphereMinimap({ rings, targets, taken }: SphereMinimap) {
+  // Build a lookup: targetIndex -> taken
+  const takenSet = useMemo(() => {
+    const s = new Set<number>();
+    taken.forEach((t, i) => { if (t) s.add(i); });
+    return s;
+  }, [taken]);
+
+  // Assign target indices to rings in the same order as buildTargets()
+  const ringGroups: Array<{ ring: (typeof RINGS)[0]; indices: number[] }> = useMemo(() => {
+    let cursor = 0;
+    return rings.map((ring) => {
+      const count = ring.count;
+      const indices = Array.from({ length: count }, (_, j) => cursor + j);
+      cursor += count;
+      return { ring, indices };
+    });
+  }, [rings]);
+
+  return (
+    <div className="flex flex-col items-center gap-[3px] pb-1">
+      {ringGroups.map(({ ring, indices }) => (
+        <div key={ring.pitch} className="flex items-center gap-[3px]">
+          {indices.map((idx) => (
+            <div
+              key={idx}
+              className="rounded-full transition-colors duration-200"
+              style={{
+                width: 8,
+                height: 8,
+                backgroundColor: takenSet.has(idx)
+                  ? 'rgba(34,197,94,0.9)'
+                  : 'transparent',
+                border: takenSet.has(idx)
+                  ? 'none'
+                  : '1.5px solid rgba(255,255,255,0.45)',
+              }}
+            />
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

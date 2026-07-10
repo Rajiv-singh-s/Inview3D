@@ -50,7 +50,7 @@ export default function ProcessingPage({ params }: { params: Promise<{ id: strin
     <div className="mx-auto max-w-3xl space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Reconstructing…</h1>
+          <h1 className="text-3xl font-bold">Processing…</h1>
           <p className="mt-1 font-mono text-sm text-slate-500">{id}</p>
         </div>
         <StatusBadge status={data.status} />
@@ -78,12 +78,12 @@ export default function ProcessingPage({ params }: { params: Promise<{ id: strin
 
       {isFailed && (
         <div className="card border-red-500/40 bg-red-500/5 p-6">
-          <p className="font-medium text-red-300">Reconstruction failed</p>
+          <p className="font-medium text-red-300">Processing failed</p>
           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-red-200/80">
             {data.error ?? 'Unknown error'}
           </pre>
-          <Link href="/upload" className="btn-ghost mt-4">
-            Try another video
+          <Link href="/capture" className="btn-ghost mt-4">
+            Try another capture
           </Link>
         </div>
       )}
@@ -91,8 +91,8 @@ export default function ProcessingPage({ params }: { params: Promise<{ id: strin
       {isDone && (
         <div className="card flex items-center justify-between border-emerald-500/40 bg-emerald-500/5 p-6">
           <div>
-            <p className="font-medium text-emerald-300">Reconstruction complete</p>
-            <p className="text-sm text-emerald-200/80">Your 3D model is ready to explore.</p>
+            <p className="font-medium text-emerald-300">Photosphere complete</p>
+            <p className="text-sm text-emerald-200/80">Your panorama is ready to explore.</p>
           </div>
           <Link href={`/viewer/${id}`} className="btn-primary">
             Open viewer

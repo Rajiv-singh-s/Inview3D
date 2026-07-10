@@ -3,12 +3,12 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppConfig } from '../../config/configuration';
 import { PipelineModule } from '../../pipeline/pipeline.module';
-import { RECONSTRUCTION_QUEUE } from './queue.constants';
-import { ReconstructionProcessor } from './reconstruction.processor';
-import { ReconstructionQueue } from './reconstruction.queue';
+import { STITCH_QUEUE } from './queue.constants';
+import { StitchProcessor } from './stitch.processor';
+import { StitchQueue } from './stitch.queue';
 
 /**
- * Wires BullMQ to Redis and registers the reconstruction queue, its worker
+ * Wires BullMQ to Redis and registers the stitching queue, its worker
  * (processor) and the enqueue facade.
  */
 @Module({
@@ -26,10 +26,10 @@ import { ReconstructionQueue } from './reconstruction.queue';
         };
       },
     }),
-    BullModule.registerQueue({ name: RECONSTRUCTION_QUEUE }),
+    BullModule.registerQueue({ name: STITCH_QUEUE }),
     PipelineModule,
   ],
-  providers: [ReconstructionProcessor, ReconstructionQueue],
-  exports: [ReconstructionQueue, BullModule],
+  providers: [StitchProcessor, StitchQueue],
+  exports: [StitchQueue, BullModule],
 })
 export class QueueModule {}

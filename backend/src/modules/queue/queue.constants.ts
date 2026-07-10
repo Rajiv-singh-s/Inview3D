@@ -1,5 +1,5 @@
-/** Name of the single reconstruction queue. */
-export const RECONSTRUCTION_QUEUE = 'reconstruction';
+/** Name of the single photosphere stitching queue. */
+export const STITCH_QUEUE = 'stitch';
 
-/** Job name within the reconstruction queue. */
-export const RECONSTRUCTION_JOB = 'reconstruct';
+/** Job name within the stitching queue. */
+export const STITCH_JOB = 'stitch-panorama';
