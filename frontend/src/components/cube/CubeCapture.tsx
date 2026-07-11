@@ -95,37 +95,48 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
   const dwellStartRef = useRef<number | null>(null);
   const capturingRef = useRef(false);
 
+  // Live mirrors so the rAF loop reads the current values without re-subscribing.
+  const capturedRef = useRef<Record<number, boolean>>({});
+  useEffect(() => {
+    capturedRef.current = capturedMap;
+  }, [capturedMap]);
+
+  // The target currently nearest the aim; recomputed every frame in the loop.
+  const [closestId, setClosestId] = useState<number>(-1);
+  const closestIdRef = useRef(-1);
+
   const capturedCount = Object.values(capturedMap).filter(Boolean).length;
   const isCaptureComplete = capturedCount >= PHOTO_TARGETS.length;
 
-  // 3D Target points
-  const targets = useMemo((): TargetPoint3D[] => {
-    // Determine closest uncaptured target
-    let closestId = -1;
-    let minErr = Infinity;
-    
-    PHOTO_TARGETS.forEach((t) => {
-      if (capturedMap[t.id]) return;
+  /** Nearest not-yet-captured target to the current aim (live). */
+  const nearestUncaptured = useCallback((): { id: number; err: number } | null => {
+    let bestId = -1;
+    let bestErr = Infinity;
+    for (const t of PHOTO_TARGETS) {
+      if (capturedRef.current[t.id]) continue;
       const dYaw = angleDelta(aimRef.current.yaw, t.yaw);
       const dPitch = t.pitch - aimRef.current.pitch;
       const err = Math.hypot(dYaw, dPitch);
-      if (err < minErr) {
-        minErr = err;
-        closestId = t.id;
+      if (err < bestErr) {
+        bestErr = err;
+        bestId = t.id;
       }
-    });
+    }
+    return bestId >= 0 ? { id: bestId, err: bestErr } : null;
+  }, []);
 
-    return PHOTO_TARGETS.map((t) => ({
-      id: t.id,
-      pos: targetToPosition(t.yaw, t.pitch),
-      captured: !!capturedMap[t.id],
-      isClosest: t.id === closestId,
-    }));
-  }, [capturedMap, ready]); // Recalculate when ready state or capturedMap changes
-
-  const closestTarget = useMemo(() => {
-    return targets.find((t) => t.isClosest && !t.captured);
-  }, [targets]);
+  // 3D target dots. `isClosest` is driven by the live `closestId` (updated each
+  // frame in the loop), so the highlight follows the aim instead of freezing.
+  const targets = useMemo(
+    (): TargetPoint3D[] =>
+      PHOTO_TARGETS.map((t) => ({
+        id: t.id,
+        pos: targetToPosition(t.yaw, t.pitch),
+        captured: !!capturedMap[t.id],
+        isClosest: t.id === closestId,
+      })),
+    [capturedMap, closestId],
+  );
 
   // ---- camera --------------------------------------------------------------
   useEffect(() => {
@@ -244,28 +255,29 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
       const now = performance.now();
       const rotSpeed = rotSpeedRef.current;
 
-      // Find if we are aiming at the closest target
-      const active = closestTarget;
-      if (active) {
-        const t = PHOTO_TARGETS.find((p) => p.id === active.id)!;
-        const dYaw = angleDelta(aimRef.current.yaw, t.yaw);
-        const dPitch = t.pitch - aimRef.current.pitch;
-        const err = Math.hypot(dYaw, dPitch);
+      // Recompute the nearest uncaptured target LIVE, from the current aim.
+      const active = nearestUncaptured();
 
+      // Keep the on-screen highlight in sync (cheap: only on change).
+      const newClosest = active ? active.id : -1;
+      if (newClosest !== closestIdRef.current) {
+        closestIdRef.current = newClosest;
+        setClosestId(newClosest);
+      }
+
+      if (active) {
         if (rotSpeed > MAX_ROTATION_DEG_PER_SEC) {
           setReason('Slow down…');
           dwellStartRef.current = null;
           setDwell(0);
-        } else if (err <= TOLERANCE_DEG) {
+        } else if (active.err <= TOLERANCE_DEG) {
           setReason(null);
-          if (dwellStartRef.current == null) {
-            dwellStartRef.current = now;
-          }
+          if (dwellStartRef.current == null) dwellStartRef.current = now;
           const elapsed = now - dwellStartRef.current;
           setDwell(Math.min(1, elapsed / DWELL_MS));
-          
-          if (elapsed >= DWELL_MS) {
-            snapPhoto(t.id);
+
+          if (elapsed >= DWELL_MS && !capturingRef.current) {
+            snapPhoto(active.id);
             dwellStartRef.current = null;
             setDwell(0);
           }
@@ -283,7 +295,7 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [ready, hasCompass, closestTarget, isCaptureComplete, showSummary, snapPhoto]);
+  }, [ready, hasCompass, isCaptureComplete, showSummary, snapPhoto, nearestUncaptured]);
 
   // ---- drag to look (no-compass fallback) ----------------------------------
   const dragging = useRef(false);
@@ -458,8 +470,8 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
           {!hasCompass && !isCaptureComplete && (
             <button
               onClick={() => {
-                // Manual capture fallback for devices without orientation sensor
-                const active = closestTarget;
+                // Manual capture fallback: snap the nearest uncaptured target.
+                const active = nearestUncaptured();
                 if (active) snapPhoto(active.id);
               }}
               className="flex-1 rounded-xl border border-white/40 px-4 py-2.5 font-medium hover:bg-white/10"
