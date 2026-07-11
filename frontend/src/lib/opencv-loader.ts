@@ -34,8 +34,8 @@ export async function loadOpenCV(): Promise<any> {
 
     // Create script tag
     const script = document.createElement('script');
-    // For this rewrite, we assume opencv.js is placed in public/opencv/
-    script.src = '/opencv/opencv.js'; 
+    // Use official OpenCV docs CDN instead of missing local file
+    script.src = 'https://docs.opencv.org/4.8.0/opencv.js'; 
     script.async = true;
     script.onload = () => {
       // OpenCV.js script loaded, waiting for WASM to compile (onRuntimeInitialized)
