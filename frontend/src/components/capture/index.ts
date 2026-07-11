@@ -1,5 +1,5 @@
 export * from './CaptureHUD';
 export * from './AlignmentRing';
-export * from './TargetOverlay';
-export * from './StitchPreview';
+export * from './StitchedWorld';
+export * from './DotOverlay';
 export * from './CaptureViewport';

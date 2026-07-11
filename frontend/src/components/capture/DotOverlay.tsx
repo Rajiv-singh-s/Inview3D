@@ -1,45 +1,41 @@
-'use client';
-
 import React from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { TARGETS, targetToWorldPos } from '@/engine/SphereTargets';
 import * as THREE from 'three';
-
 export interface TargetOverlayProps {
   activeTargetId: number | null;
   capturedIds: Set<number>;
   currentAim: { yaw: number; pitch: number };
 }
 
-const TargetSpheres = ({ activeTargetId, capturedIds, currentAim }: TargetOverlayProps) => {
+const DotCamera = ({ currentAim }: { currentAim: { yaw: number, pitch: number } }) => {
   const { camera } = useThree();
 
-  // Match R3F camera rotation to device orientation
   useFrame(() => {
     const yawRad = currentAim.yaw * (Math.PI / 180);
     const pitchRad = currentAim.pitch * (Math.PI / 180);
     
-    // YXZ order commonly matches device orientation
     camera.rotation.order = 'YXZ';
     camera.rotation.y = -yawRad;
     camera.rotation.x = -pitchRad;
     camera.rotation.z = 0;
   });
+  return null;
+};
 
+const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number | null, capturedIds: Set<number> }) => {
   return (
     <>
-      <ambientLight intensity={0.6} />
-      <pointLight position={[0, 0, 0]} intensity={1.2} />
       {TARGETS.map((target) => {
         const isCaptured = capturedIds.has(target.id);
         const isActive = activeTargetId === target.id;
         
-        let color = '#34d399'; // Emerald for uncaptured
-        if (isCaptured) color = '#ffffff'; // White for captured
-        else if (isActive) color = '#3b82f6'; // Blue for active
-
-        // Radius 5 for the spheres sphere
-        const position = targetToWorldPos(target.yaw, target.pitch, 5);
+        if (isCaptured) return null; // Hide captured dots entirely
+        
+        let color = '#34d399'; // Emerald
+        if (isActive) color = '#3b82f6'; // Blue
+        
+        const position = targetToWorldPos(target.yaw, target.pitch, 4.9);
         
         return (
           <mesh key={target.id} position={position} onUpdate={(self) => self.lookAt(0, 0, 0)}>
@@ -47,7 +43,7 @@ const TargetSpheres = ({ activeTargetId, capturedIds, currentAim }: TargetOverla
             <meshBasicMaterial 
               color={color} 
               transparent 
-              opacity={isCaptured ? 0.0 : 0.8} 
+              opacity={0.8} 
               depthTest={false}
             />
           </mesh>
@@ -57,15 +53,11 @@ const TargetSpheres = ({ activeTargetId, capturedIds, currentAim }: TargetOverla
   );
 };
 
-/**
- * 3D Overlay rendering spheres at the target capture positions.
- */
-export const TargetOverlay: React.FC<TargetOverlayProps> = (props) => {
+export const DotOverlay = ({ activeTargetId, capturedIds, currentAim }: TargetOverlayProps) => {
   return (
-    <div className="absolute inset-0 pointer-events-none z-10">
-      <Canvas camera={{ fov: 65, position: [0, 0, 0] }}>
-        <TargetSpheres {...props} />
-      </Canvas>
-    </div>
+    <Canvas camera={{ fov: 65, position: [0, 0, 0] }}>
+      <DotCamera currentAim={currentAim} />
+      <TargetSpheres activeTargetId={activeTargetId} capturedIds={capturedIds} />
+    </Canvas>
   );
 };

@@ -5,11 +5,10 @@ import { CameraController } from '@/engine/CameraController';
 import { FrameRingBuffer } from '@/engine/FrameRingBuffer';
 import { OrientationTracker, OrientationUpdate } from '@/engine/OrientationTracker';
 import { MotionGate } from '@/engine/MotionGate';
-import { ViewportMaskShader } from '@/engine/ViewportMaskShader';
 import { nearestUncaptured } from '@/engine/SphereTargets';
 import { useCaptureStore } from '@/store/captureStore';
-import { TargetOverlay } from './TargetOverlay';
-import { StitchPreview } from './StitchPreview';
+import { StitchedWorld } from './StitchedWorld';
+import { DotOverlay } from './DotOverlay';
 import { AlignmentRing } from './AlignmentRing';
 import { CaptureHUD } from './CaptureHUD';
 import { useRouter } from 'next/navigation';
@@ -22,7 +21,6 @@ export const CaptureViewport: React.FC = () => {
   const router = useRouter();
   
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   
   const store = useCaptureStore();
   const capturedIds = new Set(Object.keys(store.capturedFrames).map(Number));
@@ -40,7 +38,6 @@ export const CaptureViewport: React.FC = () => {
     ringBuffer: new FrameRingBuffer(30),
     motionGate: new MotionGate(0.8, 0.2),
     orientationTracker: null as OrientationTracker | null,
-    maskShader: null as ViewportMaskShader | null,
     animationFrameId: null as number | null,
     dwellStart: 0,
     currentAim: { yaw: 0, pitch: 0 },
@@ -75,12 +72,6 @@ export const CaptureViewport: React.FC = () => {
           await refs.ringBuffer.start(track, videoRef.current);
         }
 
-        if (canvasRef.current) {
-          canvasRef.current.width = window.innerWidth;
-          canvasRef.current.height = window.innerHeight;
-          refs.maskShader = new ViewportMaskShader(canvasRef.current);
-        }
-
         refs.orientationTracker = new OrientationTracker((update: OrientationUpdate) => {
           if (!isMounted) return;
           refs.currentAim = { yaw: update.yaw, pitch: update.pitch };
@@ -92,10 +83,6 @@ export const CaptureViewport: React.FC = () => {
         const loop = () => {
           if (!isMounted) return;
           refs.animationFrameId = requestAnimationFrame(loop);
-          
-          if (videoRef.current && refs.maskShader) {
-            refs.maskShader.render(videoRef.current, [-0.8, -0.8, 1.6, 1.6]); // NDC rect
-          }
 
           const stable = refs.motionGate.isStable();
           setIsStable(stable);
@@ -147,7 +134,6 @@ export const CaptureViewport: React.FC = () => {
       refs.orientationTracker?.stop();
       refs.ringBuffer.stop();
       refs.motionGate.destroy();
-      refs.maskShader?.dispose();
       refs.cameraController.destroy();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -215,24 +201,52 @@ export const CaptureViewport: React.FC = () => {
     router.push('/review');
   };
 
-  return (
-    <div className="relative w-full h-full bg-slate-950 overflow-hidden touch-none select-none">
-      <video ref={videoRef} className="opacity-0 pointer-events-none absolute w-[1px] h-[1px]" playsInline muted autoPlay />
-      
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full z-0" />
+  // Calculate clip-path dynamically based on screen size to make a nice center rectangle
+  // e.g. 20% from top/bottom, 15% from left/right
+  const clipStyle = {
+    clipPath: 'inset(25% 15% 25% 15%)',
+    WebkitClipPath: 'inset(25% 15% 25% 15%)'
+  };
 
-      {isAnchored && <TargetOverlay activeTargetId={activeTargetId} capturedIds={capturedIds} currentAim={currentAim} />}
-      <StitchPreview />
+  return (
+    <div className="relative w-full h-full bg-black overflow-hidden touch-none select-none">
       
-      <AlignmentRing dwellProgress={dwellProgress} isAligned={isAligned} isCaptured={isCapturedFlash} />
-      
-      <CaptureHUD 
-        onCancel={handleCancel} 
-        onReview={handleReview} 
-        onManualSnap={!isAnchored ? handleManualAnchor : undefined}
-        isStable={isStable} 
-        guidanceText={!isAnchored ? "Shoot all photos from the same spot as your initial photo to ensure an optimal result." : undefined}
+      {/* LAYER 1: Stitched World (Black background, filled with photos) */}
+      <div className="absolute inset-0 z-0">
+        {isAnchored && <StitchedWorld currentAim={currentAim} capturedFrames={store.capturedFrames} />}
+      </div>
+
+      {/* LAYER 2: Live Camera Viewfinder (Native HTML Video, clipped to center) */}
+      <video 
+        ref={videoRef} 
+        className="absolute inset-0 w-full h-full object-cover z-10" 
+        style={clipStyle}
+        playsInline 
+        muted 
+        autoPlay 
       />
+
+      {/* Center White Rectangle Border (matches clip-path) */}
+      <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center">
+        <div className="w-[70%] h-[50%] border-2 border-white/80" />
+      </div>
+
+      {/* LAYER 3: Green Dots (Transparent 3D Overlay) */}
+      <div className="absolute inset-0 z-30 pointer-events-none">
+        {isAnchored && <DotOverlay activeTargetId={activeTargetId} capturedIds={capturedIds} currentAim={currentAim} />}
+      </div>
+      
+      {/* UI LAYER */}
+      <div className="absolute inset-0 z-40 pointer-events-none">
+        <AlignmentRing dwellProgress={dwellProgress} isAligned={isAligned} isCaptured={isCapturedFlash} />
+        <CaptureHUD 
+          onCancel={handleCancel} 
+          onReview={handleReview} 
+          onManualSnap={!isAnchored ? handleManualAnchor : undefined}
+          isStable={isStable} 
+          guidanceText={!isAnchored ? "Shoot all photos from the same spot as your initial photo to ensure an optimal result." : undefined}
+        />
+      </div>
     </div>
   );
 };

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { CapturedFrame, GeoLocation } from '@/types';
 
-interface CaptureState {
+export interface CaptureState {
   // Capture Session
   isCapturing: boolean;
   capturedFrames: Record<number, CapturedFrame>; // Keyed by targetId
