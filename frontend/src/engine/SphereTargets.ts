@@ -45,7 +45,7 @@ export function targetToWorldPos(yaw: number, pitch: number, radius: number = 5)
 
   const x = radius * Math.cos(pitchRad) * Math.sin(yawRad);
   const y = radius * Math.sin(pitchRad);
-  const z = radius * Math.cos(pitchRad) * Math.cos(yawRad);
+  const z = -radius * Math.cos(pitchRad) * Math.cos(yawRad);
 
   return [x, y, z];
 }

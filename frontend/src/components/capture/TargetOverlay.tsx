@@ -21,7 +21,7 @@ const TargetSpheres = ({ activeTargetId, capturedIds, currentAim }: TargetOverla
     
     // YXZ order commonly matches device orientation
     camera.rotation.order = 'YXZ';
-    camera.rotation.y = yawRad;
+    camera.rotation.y = -yawRad;
     camera.rotation.x = pitchRad;
     camera.rotation.z = 0;
   });
