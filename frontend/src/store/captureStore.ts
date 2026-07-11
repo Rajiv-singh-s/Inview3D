@@ -19,7 +19,6 @@ interface CaptureState {
   
   // Derived state getters
   getCapturedCount: () => number;
-  getCapturedArray: () => CapturedFrame[];
 }
 
 export const useCaptureStore = create<CaptureState>((set, get) => ({
@@ -46,6 +45,4 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   resetCapture: () => set({ isCapturing: false, capturedFrames: {}, lastCapturedId: null, location: null }),
 
   getCapturedCount: () => Object.keys(get().capturedFrames).length,
-  
-  getCapturedArray: () => Object.values(get().capturedFrames),
 }));

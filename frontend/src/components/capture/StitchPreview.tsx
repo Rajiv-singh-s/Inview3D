@@ -32,7 +32,8 @@ const ProjectedFrame = ({ frame }: { frame: any }) => {
  * Renders a low-fidelity live preview of captured frames projected onto a sphere.
  */
 export const StitchPreview: React.FC = () => {
-  const frames = useCaptureStore((state) => state.getCapturedArray());
+  const capturedFrames = useCaptureStore((state) => state.capturedFrames);
+  const frames = Object.values(capturedFrames);
 
   if (frames.length === 0) return null;
 
