@@ -8,8 +8,13 @@ import { targetToWorldPos } from '@/engine/SphereTargets';
 
 const ProjectedFrame = ({ frame }: { frame: any }) => {
   const texture = useMemo(() => {
-    if (!frame.thumbnailUrl) return null;
-    return new THREE.TextureLoader().load(frame.thumbnailUrl);
+    if (!frame.thumbnailUrl || frame.thumbnailUrl === '') return null;
+    try {
+      return new THREE.TextureLoader().load(frame.thumbnailUrl);
+    } catch (e) {
+      console.warn("Failed to load texture", e);
+      return null;
+    }
   }, [frame.thumbnailUrl]);
 
   // Project at radius 4.5

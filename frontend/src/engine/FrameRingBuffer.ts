@@ -34,7 +34,7 @@ export class FrameRingBuffer {
    * Starts the continuous frame capture loop from a MediaStreamTrack.
    * @param track - The MediaStreamTrack to read frames from
    */
-  public async start(track: MediaStreamTrack): Promise<void> {
+  public async start(track: MediaStreamTrack, fallbackVideo?: HTMLVideoElement): Promise<void> {
     if (this.active) return;
     this.active = true;
 
@@ -42,7 +42,7 @@ export class FrameRingBuffer {
     if (typeof (window as any).MediaStreamTrackProcessor !== 'undefined' && typeof (window as any).VideoFrame !== 'undefined') {
       await this.startProcessorLoop(track);
     } else {
-      await this.startFallbackLoop(track);
+      await this.startFallbackLoop(track, fallbackVideo);
     }
   }
 
@@ -76,16 +76,18 @@ export class FrameRingBuffer {
     readLoop();
   }
 
-  private async startFallbackLoop(track: MediaStreamTrack): Promise<void> {
-    this.videoElement = document.createElement('video');
-    this.videoElement.autoplay = true;
-    this.videoElement.muted = true;
-    this.videoElement.playsInline = true;
-    
-    const stream = new MediaStream([track]);
-    this.videoElement.srcObject = stream;
-    
-    await this.videoElement.play().catch(e => console.warn('Video auto-play prevented', e));
+  private async startFallbackLoop(track: MediaStreamTrack, fallbackVideo?: HTMLVideoElement): Promise<void> {
+    if (fallbackVideo) {
+      this.videoElement = fallbackVideo;
+    } else {
+      this.videoElement = document.createElement('video');
+      this.videoElement.autoplay = true;
+      this.videoElement.muted = true;
+      this.videoElement.playsInline = true;
+      const stream = new MediaStream([track]);
+      this.videoElement.srcObject = stream;
+      await this.videoElement.play().catch(e => console.warn('Video auto-play prevented', e));
+    }
     
     const loop = () => {
       if (!this.active || !this.videoElement) return;

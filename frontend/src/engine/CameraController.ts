@@ -68,6 +68,17 @@ export class CameraController {
         constraintsUpdated = true;
       }
 
+      // Check and apply Zoom (request widest field of view, i.e. 0.5x if possible)
+      if (capabilities.zoom && capabilities.zoom.min !== undefined) {
+        constraints.advanced = constraints.advanced || [];
+        if (constraints.advanced.length > 0) {
+           constraints.advanced[0].zoom = capabilities.zoom.min;
+        } else {
+           constraints.advanced.push({ zoom: capabilities.zoom.min });
+        }
+        constraintsUpdated = true;
+      }
+
       if (constraintsUpdated) {
         await this.videoTrack.applyConstraints(constraints);
       }
