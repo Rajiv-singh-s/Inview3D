@@ -1,4 +1,4 @@
-import type { CubeCaptureResponse, Project, ViewerMetadata } from '@/types';
+import type { CaptureResponse, Project, ViewerMetadata } from '@/types';
 
 const API_OVERRIDE_KEY = 'inview3d.apiBaseUrl';
 
@@ -60,13 +60,13 @@ export const api = {
    * Finalize a capture by uploading the 16 photos. The backend will forward them 
    * to Google Colab's cloud GPU server for 3D Gaussian Splatting reconstruction.
    */
-  async uploadPhotos(photos: Blob[], name: string): Promise<CubeCaptureResponse> {
+  async uploadPhotos(photos: Blob[], name: string): Promise<CaptureResponse> {
     const form = new FormData();
     form.append('name', name);
     photos.forEach((blob, i) => {
       form.append('photos', blob, `frame_${i}.jpg`);
     });
-    return request<CubeCaptureResponse>('/cube/capture', { method: 'POST', body: form });
+    return request<CaptureResponse>('/capture', { method: 'POST', body: form });
   },
 
   listProjects: () => request<Project[]>('/projects'),
@@ -76,8 +76,5 @@ export const api = {
     request<{ id: string; deleted: boolean }>(`/project/${id}`, { method: 'DELETE' }),
 
   /** Absolute URL of the trained 3D Gaussian Splat (.splat) file for a completed project. */
-  cubeSplatUrl: (id: string) => `${getApiBaseUrl()}/cube/${id}/splat`,
-  
-  /** Absolute URL of a stored cube face image for a completed project (legacy/unused). */
-  cubeFaceUrl: (id: string, face: string) => `${getApiBaseUrl()}/cube/${id}/faces/${face}`,
+  captureSplatUrl: (id: string) => `${getApiBaseUrl()}/capture/${id}/splat`,
 };

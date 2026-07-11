@@ -1,42 +1,19 @@
 # ===========================================================================
 # InView3D — Docker Compose
-# One-command local stack: Redis + Backend (with CV toolchain) + Frontend.
+# One-command local stack: Backend + Frontend.
 #
 #   docker compose up --build
 #
-# The backend image bundles FFmpeg, COLMAP and OpenMVS so the full
-# photogrammetry pipeline runs inside the container.
 # ===========================================================================
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: inview3d-redis
-    restart: unless-stopped
-    # No host port published — the backend reaches Redis over the compose
-    # network as `redis:6379`. Avoids clashing with other local Redis instances.
-    expose:
-      - '6379'
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   backend:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
     container_name: inview3d-backend
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
     environment:
       - BACKEND_PORT=4000
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - UPLOAD_PATH=/data/uploads
       - OUTPUT_PATH=/data/output
       # Allow both the deployed Vercel frontend and local dev.
@@ -61,6 +38,3 @@ services:
       - NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
     ports:
       - '3000:3000'
-
-volumes:
-  redis-data:

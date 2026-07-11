@@ -34,7 +34,6 @@ export class ProjectsService implements OnModuleInit {
       if (!fs.existsSync(file)) continue;
       try {
         const project = JSON.parse(fs.readFileSync(file, 'utf8')) as Project;
-        project.faces ??= [];
         this.projects.set(project.id, project);
       } catch (err) {
         this.logger.warn(`Could not load project at ${file}: ${(err as Error).message}`);
@@ -53,15 +52,14 @@ export class ProjectsService implements OnModuleInit {
     fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify(project, null, 2), 'utf8');
   }
 
-  create(params: { originalName: string }): Project {
+  createProject(originalName: string): Project {
     const now = new Date().toISOString();
     const project: Project = {
       id: nanoid(),
-      status: 'completed', // set to failed only if storage errors out
+      status: 'uploading',
       createdAt: now,
       updatedAt: now,
-      originalName: params.originalName,
-      faces: [],
+      originalName: originalName,
     };
     this.projects.set(project.id, project);
     this.persist(project);
@@ -72,27 +70,21 @@ export class ProjectsService implements OnModuleInit {
     return [...this.projects.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  findOne(id: string): Project {
+  getProject(id: string): Project {
     const project = this.projects.get(id);
     if (!project) throw new NotFoundException(`Project ${id} not found`);
     return project;
   }
 
-  /** Apply a partial update, bump `updatedAt`, and persist. */
-  update(id: string, patch: Partial<Project>): Project {
-    const project = this.findOne(id);
+  updateProject(id: string, patch: Partial<Project>): Project {
+    const project = this.getProject(id);
     Object.assign(project, patch, { updatedAt: new Date().toISOString() });
     this.persist(project);
     return project;
   }
 
-  setStatus(id: string, status: ProjectStatus, error?: string): Project {
-    return this.update(id, { status, ...(error ? { error } : {}) });
-  }
-
-  /** Remove a project record and all of its on-disk artifacts. */
   remove(id: string): void {
-    this.findOne(id); // 404 if unknown
+    this.getProject(id); // 404 if unknown
     fs.rmSync(this.projectDir(id), { recursive: true, force: true });
     this.projects.delete(id);
   }

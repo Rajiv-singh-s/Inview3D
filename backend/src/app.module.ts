@@ -1,24 +1,24 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import configuration from './config/configuration';
-import { CubeModule } from './modules/cube/cube.module';
-import { ProjectsModule } from './modules/projects/projects.module';
 import { HealthController } from './health.controller';
+import { ProjectsModule } from './modules/projects/projects.module';
+import { CaptureModule } from './modules/capture/capture.module';
 
-/**
- * Root module. ConfigModule is global; ProjectsModule is @Global so its service
- * is available everywhere. CubeModule owns capture ingestion and face delivery.
- * No queue/Redis — the cube is built on the client, so nothing runs async here.
- */
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
       load: [configuration],
-      envFilePath: ['../.env', '.env'],
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'data'),
+      serveRoot: '/data',
     }),
     ProjectsModule,
-    CubeModule,
+    CaptureModule,
   ],
   controllers: [HealthController],
 })

@@ -18,20 +18,20 @@ export class ProjectsController {
   /** GET /project/:id — full project record. */
   @Get('project/:id')
   detail(@Param('id') id: string) {
-    return this.projects.findOne(id);
+    return this.projects.getProject(id);
   }
 
-  /** GET /viewer/:id — metadata the cube viewer needs: which faces to load. */
+  /** GET /viewer/:id — metadata the viewer needs. */
   @Get('viewer/:id')
   viewer(@Param('id') id: string) {
-    const p = this.projects.findOne(id);
+    const p = this.projects.getProject(id);
     if (p.status !== 'completed') {
       throw new NotFoundException('This room is not ready yet');
     }
     return {
       id: p.id,
       originalName: p.originalName,
-      faces: p.faces,
+      location: p.location,
       completedAt: p.updatedAt,
     };
   }
