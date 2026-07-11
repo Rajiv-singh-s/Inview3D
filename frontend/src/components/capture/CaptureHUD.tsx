@@ -17,6 +17,8 @@ export interface CaptureHUDProps {
   isStable: boolean;
   /** Total number of required photos */
   totalPhotos?: number;
+  /** Override the text displayed */
+  guidanceText?: React.ReactNode;
 }
 
 /**
@@ -29,6 +31,7 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
   onManualSnap,
   isStable,
   totalPhotos = 16,
+  guidanceText,
 }) => {
   const capturedCount = useCaptureStore((state) => state.getCapturedCount());
   
@@ -48,20 +51,22 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
         </button>
         
         <div className="px-5 py-2 rounded-full bg-black/60 text-white text-sm font-bold border border-white/10 backdrop-blur-md shadow-sm">
-          {capturedCount} of {totalPhotos} photos
+          {capturedCount} of {totalPhotos}
         </div>
       </div>
 
       {/* Bottom Bar */}
       <div className="w-full flex flex-col items-center pointer-events-auto bg-gradient-to-t from-black/90 via-black/50 to-transparent pt-16 pb-8 px-6">
         {/* Guidance Text */}
-        <div className="mb-6 text-center h-8 flex items-center justify-center">
-          <p className={`text-lg font-bold tracking-wide transition-colors duration-300 ${!isStable ? 'text-amber-400' : 'text-emerald-400 drop-shadow-[0_0_8px_rgba(52,211,153,0.8)]'}`}>
-            {isComplete 
-              ? 'Scan complete!'
-              : !isStable 
-                ? 'Hold steady...' 
-                : 'Aim at the floating dots'}
+        <div className="mb-6 text-center flex items-center justify-center min-h-[2.5rem]">
+          <p className={`text-sm md:text-base font-bold tracking-wide transition-colors duration-300 ${!isStable ? 'text-amber-400' : 'text-white'}`}>
+            {guidanceText ? guidanceText : (
+              isComplete 
+                ? 'Scan complete!'
+                : !isStable 
+                  ? 'Hold steady...' 
+                  : 'Aim at the floating dots'
+            )}
           </p>
         </div>
 

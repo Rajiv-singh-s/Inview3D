@@ -27,6 +27,7 @@ export const CaptureViewport: React.FC = () => {
   const store = useCaptureStore();
   const capturedIds = new Set(Object.keys(store.capturedFrames).map(Number));
   
+  const [isAnchored, setIsAnchored] = useState(false);
   const [activeTargetId, setActiveTargetId] = useState<number | null>(null);
   const [currentAim, setCurrentAim] = useState({ yaw: 0, pitch: 0 });
   const [isStable, setIsStable] = useState(false);
@@ -45,12 +46,17 @@ export const CaptureViewport: React.FC = () => {
     currentAim: { yaw: 0, pitch: 0 },
     activeTargetId: null as number | null,
     capturedSet: {} as Record<number, boolean>,
+    isAnchored: false,
   });
 
   useEffect(() => {
     Object.keys(store.capturedFrames).forEach(id => {
       logicRefs.current.capturedSet[Number(id)] = true;
     });
+    if (Object.keys(store.capturedFrames).length > 0) {
+      setIsAnchored(true);
+      logicRefs.current.isAnchored = true;
+    }
   }, [store.capturedFrames]);
 
   useEffect(() => {
@@ -81,7 +87,7 @@ export const CaptureViewport: React.FC = () => {
           setCurrentAim(refs.currentAim);
         });
         
-        await refs.orientationTracker.start();
+        // DO NOT START TRACKER YET! Wait for manual anchor.
 
         const loop = () => {
           if (!isMounted) return;
@@ -93,6 +99,11 @@ export const CaptureViewport: React.FC = () => {
 
           const stable = refs.motionGate.isStable();
           setIsStable(stable);
+
+          if (!refs.isAnchored) {
+            // Before anchoring, we just show the camera feed and wait for user.
+            return;
+          }
 
           const nearest = nearestUncaptured(refs.currentAim, refs.capturedSet);
           if (nearest) {
@@ -183,14 +194,31 @@ export const CaptureViewport: React.FC = () => {
     logicRefs.current.dwellStart = 0;
   };
 
+  const handleManualAnchor = async () => {
+    try {
+      if (logicRefs.current.orientationTracker) {
+        await logicRefs.current.orientationTracker.start();
+      }
+      
+      setIsAnchored(true);
+      logicRefs.current.isAnchored = true;
+      
+      // Instantly capture the first frame (target 0) since we are starting here.
+      setTimeout(() => {
+        captureFrame(0);
+      }, 50);
+
+    } catch (e) {
+      console.error("Failed to anchor", e);
+    }
+  };
+
   const handleCancel = () => {
     store.resetCapture();
     router.push('/'); 
   };
 
   const handleReview = () => {
-    // This could force the router into the review state manually
-    // Or it could be handled by the parent page based on the store
     router.push('/review');
   };
 
@@ -200,7 +228,7 @@ export const CaptureViewport: React.FC = () => {
       
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full z-0" />
 
-      <TargetOverlay activeTargetId={activeTargetId} capturedIds={capturedIds} currentAim={currentAim} />
+      {isAnchored && <TargetOverlay activeTargetId={activeTargetId} capturedIds={capturedIds} currentAim={currentAim} />}
       <StitchPreview />
       
       <AlignmentRing dwellProgress={dwellProgress} isAligned={isAligned} isCaptured={isCapturedFlash} />
@@ -208,7 +236,9 @@ export const CaptureViewport: React.FC = () => {
       <CaptureHUD 
         onCancel={handleCancel} 
         onReview={handleReview} 
+        onManualSnap={!isAnchored ? handleManualAnchor : undefined}
         isStable={isStable} 
+        guidanceText={!isAnchored ? "Shoot all photos from the same spot as your initial photo to ensure an optimal result." : undefined}
       />
     </div>
   );
