@@ -61,6 +61,7 @@ export const CaptureViewport: React.FC = () => {
       try {
         const refs = logicRefs.current;
         await refs.cameraController.init();
+        await refs.visualTracker.init();
         
         const stream = refs.cameraController.getStream();
         if (stream && videoRef.current) {

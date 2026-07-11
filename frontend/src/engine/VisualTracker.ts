@@ -3,6 +3,8 @@
  * Uses OpenCV.js for client-side ORB feature tracking and drift correction.
  */
 
+import { loadOpenCV } from '@/lib/opencv-loader';
+
 declare const cv: any;
 
 export interface DriftCorrection {
@@ -11,8 +13,8 @@ export interface DriftCorrection {
 }
 
 export class VisualTracker {
-  private orb: any;
-  private matcher: any;
+  private orb: any = null;
+  private matcher: any = null;
   
   // Reference frame data
   private refKeypoints: any = null;
@@ -26,6 +28,11 @@ export class VisualTracker {
   private readonly HEIGHT = 240;
 
   constructor() {
+    // Moved to init()
+  }
+
+  public async init(): Promise<void> {
+    await loadOpenCV();
     this.orb = new cv.ORB(500);
     this.matcher = new cv.BFMatcher(cv.NORM_HAMMING, true);
   }
