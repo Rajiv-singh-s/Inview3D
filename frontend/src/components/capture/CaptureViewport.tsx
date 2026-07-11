@@ -5,7 +5,6 @@ import { CameraController } from '@/engine/CameraController';
 import { FrameRingBuffer } from '@/engine/FrameRingBuffer';
 import { OrientationTracker, OrientationUpdate } from '@/engine/OrientationTracker';
 import { MotionGate } from '@/engine/MotionGate';
-import { VisualTracker } from '@/engine/VisualTracker';
 import { ViewportMaskShader } from '@/engine/ViewportMaskShader';
 import { nearestUncaptured } from '@/engine/SphereTargets';
 import { useCaptureStore } from '@/store/captureStore';
@@ -39,7 +38,6 @@ export const CaptureViewport: React.FC = () => {
     cameraController: new CameraController(),
     ringBuffer: new FrameRingBuffer(30),
     motionGate: new MotionGate(0.8, 0.2),
-    visualTracker: new VisualTracker(),
     orientationTracker: null as OrientationTracker | null,
     maskShader: null as ViewportMaskShader | null,
     animationFrameId: null as number | null,
@@ -61,7 +59,6 @@ export const CaptureViewport: React.FC = () => {
       try {
         const refs = logicRefs.current;
         await refs.cameraController.init();
-        await refs.visualTracker.init();
         
         const stream = refs.cameraController.getStream();
         if (stream && videoRef.current) {
@@ -145,7 +142,6 @@ export const CaptureViewport: React.FC = () => {
       if (refs.animationFrameId) cancelAnimationFrame(refs.animationFrameId);
       refs.orientationTracker?.stop();
       refs.ringBuffer.stop();
-      refs.visualTracker.destroy();
       refs.motionGate.destroy();
       refs.maskShader?.dispose();
       refs.cameraController.destroy();
