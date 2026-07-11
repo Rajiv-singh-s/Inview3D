@@ -3,76 +3,129 @@
 import { Canvas } from '@react-three/fiber';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '@/lib/api';
-import { CubeFaces } from './cubeFaces';
-import { CubeScene, LookRef } from './CubeScene';
-import { angleDelta, coverageHint, readAim } from './orientation';
-import { sharpness } from './quality';
+import { CubeScene, LookRef, TargetPoint3D } from './CubeScene';
+import { angleDelta, readAim } from './orientation';
 
 // ---- Tuning Constants -----------------------------------------------------
 
-/** Sweeping faster than this guarantees motion blur; refuse to capture. */
-const MAX_ROTATION_DEG_PER_SEC = 20;
-/** Frames below this Laplacian variance are rejected as blurred. */
-const MIN_SHARPNESS = 8;
-/** Minimum angular rotation (deg) since last accepted frame before capturing again. */
-const MIN_ROTATION_SINCE_LAST = 5;
-/** Minimum milliseconds between accepted frames, to avoid overwhelming the projector. */
-const MIN_CAPTURE_INTERVAL_MS = 200;
-/**
- * Assumed horizontal field of view of the rear camera, in degrees.
- * Typical phone main cameras sit around 65–70°.
- */
-const CAMERA_HFOV_DEG = 68;
-/** Coverage fraction at which the capture auto-completes. */
-const AUTO_COMPLETE_COVERAGE = 0.92;
-/** Hard ceiling — stop accepting frames past this coverage. */
-const HARD_LIMIT_COVERAGE = 0.98;
+const MAX_ROTATION_DEG_PER_SEC = 25;
+const TOLERANCE_DEG = 12; // Snap radius to dots
+const DWELL_MS = 500; // Hold aligned to capture
+
+// 16 spherical targets [yaw, pitch] covering a sphere
+const PHOTO_TARGETS = [
+  // Horizon ring (8 targets)
+  { id: 0, yaw: 0, pitch: 0 },
+  { id: 1, yaw: 45, pitch: 0 },
+  { id: 2, yaw: 90, pitch: 0 },
+  { id: 3, yaw: 135, pitch: 0 },
+  { id: 4, yaw: 180, pitch: 0 },
+  { id: 5, yaw: 225, pitch: 0 },
+  { id: 6, yaw: 270, pitch: 0 },
+  { id: 7, yaw: 315, pitch: 0 },
+  // Upper ring (4 targets)
+  { id: 8, yaw: 0, pitch: 45 },
+  { id: 9, yaw: 90, pitch: 45 },
+  { id: 10, yaw: 180, pitch: 45 },
+  { id: 11, yaw: 270, pitch: 45 },
+  // Lower ring (4 targets)
+  { id: 12, yaw: 0, pitch: -45 },
+  { id: 13, yaw: 90, pitch: -45 },
+  { id: 14, yaw: 180, pitch: -45 },
+  { id: 15, yaw: 270, pitch: -45 },
+];
+
+function targetToPosition(yaw: number, pitch: number, radius = 5): [number, number, number] {
+  const yRad = (yaw * Math.PI) / 180;
+  const pRad = (pitch * Math.PI) / 180;
+  const x = radius * Math.cos(pRad) * Math.sin(yRad);
+  const y = radius * Math.sin(pRad);
+  const z = -radius * Math.cos(pRad) * Math.cos(yRad);
+  return [x, y, z];
+}
+
+function playSnapSound() {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime); // A5 note
+    gain.gain.setValueAtTime(0.1, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.15);
+  } catch (e) {
+    // AudioContext blocked or unsupported
+  }
+}
 
 interface CubeCaptureProps {
-  /** Called with the new project id once the finalized cube is stored. */
   onComplete: (projectId: string) => void;
   onCancel: () => void;
 }
 
-/**
- * Continuous cubemap capture engine.
- *
- * The user sees a live 3D cube from the inside, steered by their phone's
- * orientation. As they rotate freely, frames are automatically accepted when
- * stable + sharp + sufficiently rotated, and projected into the cubemap in
- * real time. The room appears around them progressively. No predefined face
- * targets, no shutter button — just rotate and watch.
- */
 export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const cube = useMemo(() => new CubeFaces(), []);
   const look = useRef<LookRef>({ yaw: 0, pitch: 0 });
 
-  // Orientation tracking — all in refs so the rAF loop reads current values.
+  // Orientation refs
   const baseYawRef = useRef<number | null>(null);
   const aimRef = useRef({ yaw: 0, pitch: 0 });
   const rotSpeedRef = useRef(0);
   const prevAimRef = useRef<{ yaw: number; pitch: number; t: number } | null>(null);
 
-  // Continuous capture state
-  const lastCaptureAimRef = useRef<{ yaw: number; pitch: number } | null>(null);
-  const lastCaptureTimeRef = useRef(0);
-  const capturingRef = useRef(false);
-  const acceptedCountRef = useRef(0);
-
+  // Capture state
+  const [capturedMap, setCapturedMap] = useState<Record<number, boolean>>({});
+  const [capturedImages, setCapturedImages] = useState<string[]>([]);
+  const photosRef = useRef<Blob[]>([]);
+  
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCompass, setHasCompass] = useState(false);
-  const [coverage, setCoverage] = useState(0);
-  const [acceptedCount, setAcceptedCount] = useState(0);
   const [flash, setFlash] = useState(false);
-  const [hint, setHint] = useState<string | null>(null);
+  const [dwell, setDwell] = useState(0);
   const [reason, setReason] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [autoCompleted, setAutoCompleted] = useState(false);
+  const [showSummary, setShowSummary] = useState(false);
 
-  const done = coverage >= AUTO_COMPLETE_COVERAGE || autoCompleted;
+  const dwellStartRef = useRef<number | null>(null);
+  const capturingRef = useRef(false);
+
+  const capturedCount = Object.values(capturedMap).filter(Boolean).length;
+  const isCaptureComplete = capturedCount >= PHOTO_TARGETS.length;
+
+  // 3D Target points
+  const targets = useMemo((): TargetPoint3D[] => {
+    // Determine closest uncaptured target
+    let closestId = -1;
+    let minErr = Infinity;
+    
+    PHOTO_TARGETS.forEach((t) => {
+      if (capturedMap[t.id]) return;
+      const dYaw = angleDelta(aimRef.current.yaw, t.yaw);
+      const dPitch = t.pitch - aimRef.current.pitch;
+      const err = Math.hypot(dYaw, dPitch);
+      if (err < minErr) {
+        minErr = err;
+        closestId = t.id;
+      }
+    });
+
+    return PHOTO_TARGETS.map((t) => ({
+      id: t.id,
+      pos: targetToPosition(t.yaw, t.pitch),
+      captured: !!capturedMap[t.id],
+      isClosest: t.id === closestId,
+    }));
+  }, [capturedMap, ready]); // Recalculate when ready state or capturedMap changes
+
+  const closestTarget = useMemo(() => {
+    return targets.find((t) => t.isClosest && !t.captured);
+  }, [targets]);
 
   // ---- camera --------------------------------------------------------------
   useEffect(() => {
@@ -107,11 +160,10 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((t) => t.stop());
-      cube.dispose();
     };
-  }, [cube]);
+  }, []);
 
-  // ---- device orientation drives both aim and the live cube camera ---------
+  // ---- device orientation driving camera steering ---------------------------
   useEffect(() => {
     const onOrientation = (e: DeviceOrientationEvent) => {
       const raw = readAim(e);
@@ -119,7 +171,6 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
       setHasCompass(true);
       if (baseYawRef.current == null) baseYawRef.current = raw.yaw;
 
-      // Relative to the origin established on the first frame (front = 0).
       const yaw = ((raw.yaw - baseYawRef.current) % 360 + 360) % 360;
       const aim = { yaw, pitch: raw.pitch };
 
@@ -140,110 +191,101 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
       }
 
       aimRef.current = aim;
-      look.current = aim; // the 3D cube looks where the phone points
+      look.current = aim;
     };
     window.addEventListener('deviceorientation', onOrientation, true);
     return () => window.removeEventListener('deviceorientation', onOrientation, true);
   }, []);
 
-  const triggerFlash = useCallback(() => {
-    setFlash(true);
-    setTimeout(() => setFlash(false), 100);
-  }, []);
-
-  /** Grab the current video frame and project it into the cube. */
-  const captureFrame = useCallback((): boolean => {
+  // ---- snap a photo --------------------------------------------------------
+  const snapPhoto = useCallback((targetId: number) => {
     const video = videoRef.current;
-    if (!video || video.videoWidth === 0 || capturingRef.current) return false;
-
-    const sharp = sharpness(video, video.videoWidth, video.videoHeight);
-    if (sharp < MIN_SHARPNESS) {
-      setReason('Hold steady — too blurry');
-      return false;
-    }
-
+    if (!video || video.videoWidth === 0 || capturingRef.current) return;
+    
     capturingRef.current = true;
+    
     const cap = document.createElement('canvas');
     cap.width = video.videoWidth;
     cap.height = video.videoHeight;
-    cap.getContext('2d')!.drawImage(video, 0, 0);
+    const ctx = cap.getContext('2d')!;
+    ctx.drawImage(video, 0, 0);
+    
+    // Save image blob for upload
+    cap.toBlob((blob) => {
+      if (blob) {
+        photosRef.current[targetId] = blob;
+        
+        // Save thumbnail for summary screen
+        const thumbUrl = cap.toDataURL('image/jpeg', 0.5);
+        setCapturedImages((prev) => {
+          const next = [...prev];
+          next[targetId] = thumbUrl;
+          return next;
+        });
 
-    // Project the whole frame into cube space at the current device orientation.
-    const pose = aimRef.current;
-    cube.project(cap, pose, CAMERA_HFOV_DEG, sharp);
+        // Mark target captured
+        setCapturedMap((prev) => ({ ...prev, [targetId]: true }));
+        playSnapSound();
+        
+        // Trigger visual flash
+        setFlash(true);
+        setTimeout(() => setFlash(false), 100);
+      }
+      capturingRef.current = false;
+    }, 'image/jpeg', 0.92);
+  }, []);
 
-    // Update state
-    const newCoverage = cube.totalCoverage();
-    setCoverage(newCoverage);
-    acceptedCountRef.current++;
-    setAcceptedCount(acceptedCountRef.current);
-    lastCaptureAimRef.current = { ...pose };
-    lastCaptureTimeRef.current = performance.now();
-
-    triggerFlash();
-    setReason(null);
-
-    // Check auto-complete
-    if (newCoverage >= AUTO_COMPLETE_COVERAGE) {
-      setAutoCompleted(true);
-    }
-
-    setTimeout(() => (capturingRef.current = false), 150);
-    return true;
-  }, [cube, triggerFlash]);
-
-  // ---- continuous auto-capture loop (compass mode) -------------------------
+  // ---- auto capture logic loop ---------------------------------------------
   useEffect(() => {
-    if (!ready || !hasCompass || uploading) return;
+    if (!ready || !hasCompass || isCaptureComplete || showSummary) return;
 
     let raf = 0;
     const tick = () => {
       const now = performance.now();
-      const aim = aimRef.current;
-      const currentCoverage = cube.totalCoverage();
-
-      // Stop capturing if we've reached the hard limit
-      if (currentCoverage >= HARD_LIMIT_COVERAGE) {
-        setHint('Room capture complete!');
-        raf = requestAnimationFrame(tick);
-        return;
-      }
-
-      // Update the nudge hint periodically
-      const nudge = coverageHint(cube);
-      setHint(nudge);
-
-      // Check if conditions are right for a capture
-      const timeSinceLastCapture = now - lastCaptureTimeRef.current;
       const rotSpeed = rotSpeedRef.current;
 
-      if (rotSpeed > MAX_ROTATION_DEG_PER_SEC) {
-        setReason('Slow down…');
-      } else if (timeSinceLastCapture > MIN_CAPTURE_INTERVAL_MS) {
-        // Check rotation since last accepted frame
-        const lastAim = lastCaptureAimRef.current;
-        let rotationSinceLast = Infinity; // first capture always accepted
-        if (lastAim) {
-          const dYaw = angleDelta(lastAim.yaw, aim.yaw);
-          const dPitch = aim.pitch - lastAim.pitch;
-          rotationSinceLast = Math.hypot(dYaw, dPitch);
-        }
+      // Find if we are aiming at the closest target
+      const active = closestTarget;
+      if (active) {
+        const t = PHOTO_TARGETS.find((p) => p.id === active.id)!;
+        const dYaw = angleDelta(aimRef.current.yaw, t.yaw);
+        const dPitch = t.pitch - aimRef.current.pitch;
+        const err = Math.hypot(dYaw, dPitch);
 
-        if (rotationSinceLast >= MIN_ROTATION_SINCE_LAST) {
+        if (rotSpeed > MAX_ROTATION_DEG_PER_SEC) {
+          setReason('Slow down…');
+          dwellStartRef.current = null;
+          setDwell(0);
+        } else if (err <= TOLERANCE_DEG) {
           setReason(null);
-          captureFrame();
+          if (dwellStartRef.current == null) {
+            dwellStartRef.current = now;
+          }
+          const elapsed = now - dwellStartRef.current;
+          setDwell(Math.min(1, elapsed / DWELL_MS));
+          
+          if (elapsed >= DWELL_MS) {
+            snapPhoto(t.id);
+            dwellStartRef.current = null;
+            setDwell(0);
+          }
         } else {
-          setReason(null); // stable but hasn't rotated enough — that's fine, no warning
+          setReason(null);
+          dwellStartRef.current = null;
+          setDwell(0);
         }
+      } else {
+        setReason(null);
+        setDwell(0);
       }
 
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [ready, hasCompass, uploading, cube, captureFrame]);
+  }, [ready, hasCompass, closestTarget, isCaptureComplete, showSummary, snapPhoto]);
 
-  // ---- drag to look around (no-compass fallback) ---------------------------
+  // ---- drag to look (no-compass fallback) ----------------------------------
   const dragging = useRef(false);
   const last = useRef({ x: 0, y: 0 });
   const onPointerDown = (e: React.PointerEvent) => {
@@ -258,15 +300,15 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     last.current = { x: e.clientX, y: e.clientY };
     look.current.yaw = (look.current.yaw - dx * 0.3 + 360) % 360;
     look.current.pitch = Math.max(-89, Math.min(89, look.current.pitch + dy * 0.3));
+    aimRef.current = look.current;
   };
   const endDrag = () => (dragging.current = false);
 
   const finalize = async () => {
     setUploading(true);
-    setReason(null);
     try {
-      const faces = await cube.exportFaces();
-      const res = await api.uploadCube(faces, `Room ${new Date().toLocaleString()}`);
+      const photosArray = PHOTO_TARGETS.map((t) => photosRef.current[t.id]).filter(Boolean);
+      const res = await api.uploadPhotos(photosArray, `Splat Room ${new Date().toLocaleString()}`);
       onComplete(res.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Upload failed');
@@ -286,17 +328,51 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
     );
   }
 
-  const coveragePct = Math.round(coverage * 100);
-  const statusText = uploading
-    ? 'Finalizing room…'
-    : done
-      ? 'Capture complete!'
-      : coveragePct > 0
-        ? 'Keep rotating slowly…'
-        : 'Start by looking around the room';
+  // --- RENDERING SUMMARY SCREEN ---
+  if (showSummary) {
+    return (
+      <div className="relative mx-auto flex h-[78vh] w-full max-w-md flex-col justify-between overflow-y-auto rounded-2xl border border-slate-800 bg-[#0f1115] p-5 text-white">
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold text-center text-green-400">Capture Complete!</h2>
+          <p className="text-sm text-center text-slate-400">
+            Verify your 16 source images before uploading for 3D Gaussian Splatting reconstruction.
+          </p>
+          
+          <div className="grid grid-cols-4 gap-2 py-3">
+            {PHOTO_TARGETS.map((t) => (
+              <div key={t.id} className="relative aspect-square overflow-hidden rounded-lg bg-slate-900 border border-slate-800">
+                {capturedImages[t.id] ? (
+                  <img src={capturedImages[t.id]} alt={`Captured ${t.id}`} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-xs text-slate-700">Empty</div>
+                )}
+                <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1 text-[9px] text-slate-300">#{t.id + 1}</span>
+              </div>
+            ))}
+          </div>
+        </div>
 
-  const message = reason ?? hint;
+        <div className="space-y-3 pt-4">
+          <button
+            onClick={finalize}
+            disabled={uploading}
+            className="w-full rounded-xl bg-green-500 py-3 font-semibold text-white hover:bg-green-600 disabled:opacity-40"
+          >
+            {uploading ? 'Processing 3D World (takes ~3m)...' : 'Stitch and post'}
+          </button>
+          <button
+            onClick={() => setShowSummary(false)}
+            disabled={uploading}
+            className="w-full rounded-xl border border-slate-700 py-3 font-medium text-slate-300 hover:bg-slate-900"
+          >
+            Back to Capture
+          </button>
+        </div>
+      </div>
+    );
+  }
 
+  // --- RENDERING CAPTURE SCREEN ---
   return (
     <div
       className="relative mx-auto h-[78vh] w-full max-w-md touch-none select-none overflow-hidden rounded-2xl border border-slate-800 bg-black"
@@ -305,91 +381,105 @@ export function CubeCapture({ onComplete, onCancel }: CubeCaptureProps) {
       onPointerUp={endDrag}
       onPointerLeave={endDrag}
     >
-      {/* The room cube being built, seen from the inside. */}
-      <Canvas camera={{ fov: 80, position: [0, 0, 0], near: 0.1, far: 100 }} dpr={[1, 2]}>
-        <CubeScene faces={cube} look={look} />
-      </Canvas>
+      {/* Full screen video preview */}
+      <div className="absolute inset-0 z-0 h-full w-full">
+        <video ref={videoRef} playsInline muted className="h-full w-full object-cover opacity-80" />
+      </div>
 
-      {/* Live camera viewfinder — the source feeding the cube. */}
-      <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+      {/* R3F Canvas showing the floating target dots in space */}
+      <div className="absolute inset-0 z-10 h-full w-full">
+        <Canvas camera={{ fov: 70, position: [0, 0, 0], near: 0.1, far: 100 }} dpr={[1, 2]} style={{ background: 'transparent' }}>
+          <CubeScene targets={targets} look={look} />
+        </Canvas>
+      </div>
+
+      {/* Target Reticle (HTML Overlay on center) */}
+      <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
         <div
-          className={`relative grid place-items-center overflow-hidden rounded-full border-4 transition-all ${
-            acceptedCount > 0 ? 'border-green-400/80' : 'border-white/80'
+          className={`relative grid place-items-center rounded-full border-4 transition-all duration-100 ${
+            dwell > 0 ? 'scale-105 border-blue-400' : 'border-white/50'
           }`}
-          style={{ width: 180, height: 180 }}
+          style={{ width: 90, height: 90 }}
         >
-          <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />
+          {/* Central dot */}
+          <div className={`h-3 w-3 rounded-full ${dwell > 0 ? 'bg-blue-400' : 'bg-white/80'}`} />
+          
+          {/* Progress Ring */}
+          {dwell > 0 && (
+            <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 36 36">
+              <path
+                fill="none"
+                stroke="#60a5fa"
+                strokeWidth="3.5"
+                strokeLinecap="round"
+                strokeDasharray={`${dwell * 100}, 100`}
+                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+              />
+            </svg>
+          )}
         </div>
       </div>
 
-      {/* Capture flash */}
+      {/* Visual Flash effect */}
       <div
-        className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100"
-        style={{ opacity: flash ? 0.45 : 0 }}
+        className="pointer-events-none absolute inset-0 z-30 bg-white transition-opacity duration-100"
+        style={{ opacity: flash ? 0.6 : 0 }}
       />
 
-      {/* Top bar: cancel + coverage % */}
-      <div className="absolute inset-x-0 top-0 flex items-center justify-between p-3">
+      {/* Top HUD: cancel + photos count */}
+      <div className="absolute inset-x-0 top-0 z-20 flex items-center justify-between p-4">
         <button
           onClick={onCancel}
-          className="grid h-9 w-9 place-items-center rounded-full bg-red-500 text-white"
+          className="grid h-9 w-9 place-items-center rounded-full bg-red-500/80 text-white backdrop-blur hover:bg-red-600"
           aria-label="Cancel"
         >
           ✕
         </button>
-        <span className="rounded-full bg-black/50 px-3 py-1 text-sm font-semibold text-white backdrop-blur-sm tabular-nums">
-          {coveragePct}% captured
+        <span className="rounded-full bg-black/60 px-3 py-1 text-sm font-semibold text-white backdrop-blur-sm">
+          {capturedCount} of {PHOTO_TARGETS.length} photos
         </span>
       </div>
 
-      {/* Guidance */}
-      <div className="absolute inset-x-0 bottom-0 space-y-3 bg-gradient-to-t from-black/85 to-transparent p-4">
-        <p className="text-center text-base font-semibold text-white">
-          {statusText}
+      {/* Bottom HUD: Guidance + actions */}
+      <div className="absolute inset-x-0 bottom-0 z-20 space-y-3 bg-gradient-to-t from-black/90 to-transparent p-4 text-white">
+        <p className="text-center text-sm font-medium tracking-wide">
+          {reason ?? (isCaptureComplete ? 'All targets shot!' : 'Aim at the floating dots')}
         </p>
-        {message && !done && !uploading && (
-          <p
-            className={`text-center text-sm font-medium ${
-              reason ? 'text-amber-300' : 'text-white/80'
-            }`}
-          >
-            {message}
-          </p>
-        )}
 
-        {/* Coverage progress bar */}
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/25">
+        {/* Progress Bar */}
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/20">
           <div
             className="h-full rounded-full bg-green-500 transition-[width] duration-300"
-            style={{ width: `${coveragePct}%` }}
+            style={{ width: `${(capturedCount / PHOTO_TARGETS.length) * 100}%` }}
           />
         </div>
 
         <div className="flex gap-3">
-          {!hasCompass && !done && (
+          {!hasCompass && !isCaptureComplete && (
             <button
               onClick={() => {
-                // For no-compass fallback: manually capture at the current look direction
-                aimRef.current = look.current;
-                captureFrame();
+                // Manual capture fallback for devices without orientation sensor
+                const active = closestTarget;
+                if (active) snapPhoto(active.id);
               }}
-              disabled={uploading}
-              className="flex-1 rounded-xl border border-white/40 px-4 py-2.5 font-medium text-white disabled:opacity-40"
+              className="flex-1 rounded-xl border border-white/40 px-4 py-2.5 font-medium hover:bg-white/10"
             >
-              Capture here
+              Manual Snap
             </button>
           )}
+          
           <button
-            onClick={finalize}
-            disabled={acceptedCount < 1 || uploading}
-            className="flex-1 rounded-xl bg-green-500 px-5 py-2.5 font-medium text-white disabled:opacity-40"
+            onClick={() => setShowSummary(true)}
+            disabled={capturedCount === 0}
+            className="flex-1 rounded-xl bg-green-500 px-5 py-2.5 font-semibold hover:bg-green-600 disabled:opacity-40"
           >
-            {uploading ? 'Uploading…' : done ? 'Finish room' : `Finish (${coveragePct}%)`}
+            {isCaptureComplete ? 'Proceed to Stitch' : `Review (${capturedCount})`}
           </button>
         </div>
+
         {!hasCompass && (
-          <p className="text-center text-[11px] text-white/60">
-            No motion sensor — drag to look around the cube, and capture each direction in turn.
+          <p className="text-center text-[10px] text-white/50">
+            No orientation sensor found. Drag to turn and press manual snap to capture.
           </p>
         )}
       </div>

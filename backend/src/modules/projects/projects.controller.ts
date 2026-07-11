@@ -25,7 +25,7 @@ export class ProjectsController {
   @Get('viewer/:id')
   viewer(@Param('id') id: string) {
     const p = this.projects.findOne(id);
-    if (p.status !== 'completed' || p.faces.length === 0) {
+    if (p.status !== 'completed') {
       throw new NotFoundException('This room is not ready yet');
     }
     return {

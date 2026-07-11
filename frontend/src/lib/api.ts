@@ -57,16 +57,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   /**
-   * Finalize a capture by uploading the painted cube faces. The cube was built
-   * live in the browser, so the backend only stores the faces — there is no
-   * server-side reconstruction step.
+   * Finalize a capture by uploading the 16 photos. The backend will forward them 
+   * to Google Colab's cloud GPU server for 3D Gaussian Splatting reconstruction.
    */
-  async uploadCube(faces: Map<string, Blob>, name: string): Promise<CubeCaptureResponse> {
+  async uploadPhotos(photos: Blob[], name: string): Promise<CubeCaptureResponse> {
     const form = new FormData();
     form.append('name', name);
-    for (const [face, blob] of faces) {
-      form.append('faces', blob, `${face}.jpg`);
-    }
+    photos.forEach((blob, i) => {
+      form.append('photos', blob, `frame_${i}.jpg`);
+    });
     return request<CubeCaptureResponse>('/cube/capture', { method: 'POST', body: form });
   },
 
@@ -76,6 +75,9 @@ export const api = {
   deleteProject: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/project/${id}`, { method: 'DELETE' }),
 
-  /** Absolute URL of a stored cube face image for a completed project. */
+  /** Absolute URL of the trained 3D Gaussian Splat (.splat) file for a completed project. */
+  cubeSplatUrl: (id: string) => `${getApiBaseUrl()}/cube/${id}/splat`,
+  
+  /** Absolute URL of a stored cube face image for a completed project (legacy/unused). */
   cubeFaceUrl: (id: string, face: string) => `${getApiBaseUrl()}/cube/${id}/faces/${face}`,
 };

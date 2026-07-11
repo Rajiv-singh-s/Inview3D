@@ -1,52 +1,31 @@
 'use client';
 
 import { useFrame, useThree } from '@react-three/fiber';
-import { useMemo } from 'react';
 import * as THREE from 'three';
-import { CUBE_FACES, CubeFace, CubeFaces } from './cubeFaces';
 
-/** Half-size of the room cube. Camera sits at the origin, inside. */
-const D = 8;
-
-/** Placement of each inward-facing wall: position and Euler rotation. */
-const FACE_TRANSFORMS: Record<CubeFace, { pos: [number, number, number]; rot: [number, number, number] }> = {
-  front: { pos: [0, 0, -D], rot: [0, 0, 0] },
-  back: { pos: [0, 0, D], rot: [0, Math.PI, 0] },
-  right: { pos: [D, 0, 0], rot: [0, -Math.PI / 2, 0] },
-  left: { pos: [-D, 0, 0], rot: [0, Math.PI / 2, 0] },
-  top: { pos: [0, D, 0], rot: [Math.PI / 2, 0, 0] },
-  bottom: { pos: [0, -D, 0], rot: [-Math.PI / 2, 0, 0] },
-};
-
-/** Mutable look direction the parent updates each frame (device orientation or drag). */
 export interface LookRef {
   yaw: number;
   pitch: number;
 }
 
-interface CubeSceneProps {
-  faces: CubeFaces;
+export interface TargetPoint3D {
+  id: number;
+  pos: [number, number, number];
+  captured: boolean;
+  isClosest: boolean;
+}
+
+interface SplatCaptureSceneProps {
+  targets: TargetPoint3D[];
   look: React.RefObject<LookRef>;
 }
 
 /**
- * Renders the room as six inward-facing textured planes with the camera at the
- * centre, and steers that camera from `look` every frame. The same textures are
- * painted live during capture and reused by the viewer, so what the user builds
- * is exactly what they later explore.
+ * Renders the guided capture targets as 3D green/white spheres in space,
+ * and steers the camera according to device orientation.
  */
-export function CubeScene({ faces, look }: CubeSceneProps) {
+export function CubeScene({ targets, look }: SplatCaptureSceneProps) {
   const { camera } = useThree();
-
-  const walls = useMemo(
-    () =>
-      CUBE_FACES.map((face) => ({
-        face,
-        transform: FACE_TRANSFORMS[face],
-        texture: faces.textures.get(face)!,
-      })),
-    [faces],
-  );
 
   useFrame(() => {
     const { yaw, pitch } = look.current;
@@ -61,12 +40,19 @@ export function CubeScene({ faces, look }: CubeSceneProps) {
 
   return (
     <>
-      {walls.map(({ face, transform, texture }) => (
-        <mesh key={face} position={transform.pos} rotation={transform.rot}>
-          <planeGeometry args={[2 * D, 2 * D]} />
-          <meshBasicMaterial map={texture} side={THREE.FrontSide} toneMapped={false} />
-        </mesh>
-      ))}
+      <ambientLight intensity={1.5} />
+      {targets.map((t) => {
+        // Change color to white if it's the currently targeted/closest dot
+        const color = t.captured ? '#ffffff' : t.isClosest ? '#60a5fa' : '#22c55e';
+        const scale = t.isClosest ? 1.3 : 1.0;
+        
+        return (
+          <mesh key={t.id} position={t.pos} scale={[scale, scale, scale]}>
+            <sphereGeometry args={[0.22, 32, 32]} />
+            <meshBasicMaterial color={color} toneMapped={false} />
+          </mesh>
+        );
+      })}
     </>
   );
 }

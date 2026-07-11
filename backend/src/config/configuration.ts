@@ -20,6 +20,7 @@ export interface AppConfig {
   /** Upper bound on the stitched equirectangular width, in pixels. */
   panoramaMaxWidth: number;
   pipelineScriptsDir: string;
+  colabApiUrl: string;
   redis: {
     host: string;
     port: number;
@@ -53,6 +54,7 @@ export default (): { app: AppConfig } => {
       stitchMaxDim: toInt(process.env.STITCH_MAX_DIM, 1600),
       panoramaMaxWidth: toInt(process.env.PANORAMA_MAX_WIDTH, 8192),
       pipelineScriptsDir: resolvePath(process.env.PIPELINE_SCRIPTS_DIR, defaultScripts),
+      colabApiUrl: process.env.COLAB_API_URL ?? 'https://vengeful-impotency-rebound.ngrok-free.dev',
       redis: {
         host: process.env.REDIS_HOST ?? '127.0.0.1',
         port: toInt(process.env.REDIS_PORT, 6379),

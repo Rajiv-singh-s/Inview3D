@@ -5,7 +5,6 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import type { CubeFace } from '@/components/cube/cubeFaces';
 
 // WebGL — render client-side only.
 const CubeViewer = dynamic(
@@ -52,14 +51,14 @@ export default function ViewerPage({ params }: { params: Promise<{ id: string }>
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">{data.originalName}</h1>
-          <p className="text-sm text-slate-400">Room cube · {data.faces.length} faces</p>
+          <p className="text-sm text-slate-400">3D Volumetric Scene</p>
         </div>
         <Link href="/capture" className="btn-primary">
           New capture
         </Link>
       </div>
 
-      <CubeViewer id={id} faces={data.faces as CubeFace[]} />
+      <CubeViewer id={id} />
     </div>
   );
 }
