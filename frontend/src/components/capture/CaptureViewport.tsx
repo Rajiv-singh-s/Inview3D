@@ -112,22 +112,15 @@ export const CaptureViewport: React.FC = () => {
               setActiveTargetId(nearest.id);
             }
             
-            const aligned = nearest.angularError < 6.0; // 6 degrees threshold
+            // Widen threshold slightly for easier sweeping
+            const aligned = nearest.angularError < 12.0; 
             if (isAligned !== aligned) setIsAligned(aligned);
 
-            if (stable && aligned) {
-              if (refs.dwellStart === 0) {
-                refs.dwellStart = performance.now();
-              }
-              const progress = (performance.now() - refs.dwellStart) / 500; // 500ms dwell required
-              setDwellProgress(Math.min(1, progress));
-
-              if (progress >= 1) {
-                captureFrame(nearest.id);
-                refs.dwellStart = 0;
-              }
+            // INSTANT CAPTURE: No dwell time, no stability check needed.
+            // Matches the video where 15 photos are taken in 7 seconds.
+            if (aligned) {
+              captureFrame(nearest.id);
             } else {
-              refs.dwellStart = 0;
               setDwellProgress(0);
             }
           } else {

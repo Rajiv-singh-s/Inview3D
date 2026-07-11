@@ -59,13 +59,11 @@ export const CaptureHUD: React.FC<CaptureHUDProps> = ({
       <div className="w-full flex flex-col items-center pointer-events-auto bg-gradient-to-t from-black/90 via-black/50 to-transparent pt-16 pb-8 px-6">
         {/* Guidance Text */}
         <div className="mb-6 text-center flex items-center justify-center min-h-[2.5rem]">
-          <p className={`text-sm md:text-base font-bold tracking-wide transition-colors duration-300 ${!isStable ? 'text-amber-400' : 'text-white'}`}>
+          <p className="text-sm md:text-base font-bold tracking-wide transition-colors duration-300 text-white">
             {guidanceText ? guidanceText : (
               isComplete 
                 ? 'Scan complete!'
-                : !isStable 
-                  ? 'Hold steady...' 
-                  : 'Aim at the floating dots'
+                : 'Aim at the floating dots'
             )}
           </p>
         </div>
