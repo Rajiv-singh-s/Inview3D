@@ -195,7 +195,7 @@ export const CaptureViewport: React.FC = () => {
   };
 
   return (
-    <div className="relative w-full h-full bg-slate-950 overflow-hidden">
+    <div className="relative w-full h-full bg-slate-950 overflow-hidden touch-none select-none">
       <video ref={videoRef} className="opacity-0 pointer-events-none absolute w-[1px] h-[1px]" playsInline muted autoPlay />
       
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full z-0" />

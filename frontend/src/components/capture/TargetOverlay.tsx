@@ -42,16 +42,13 @@ const TargetSpheres = ({ activeTargetId, capturedIds, currentAim }: TargetOverla
         const position = targetToWorldPos(target.yaw, target.pitch, 5);
         
         return (
-          <mesh key={target.id} position={position}>
-            <sphereGeometry args={[0.2, 32, 32]} />
-            <meshStandardMaterial 
+          <mesh key={target.id} position={position} onUpdate={(self) => self.lookAt(0, 0, 0)}>
+            <circleGeometry args={[0.35, 32]} />
+            <meshBasicMaterial 
               color={color} 
               transparent 
-              opacity={isCaptured ? 0.3 : 0.8} 
-              emissive={color}
-              emissiveIntensity={isActive ? 0.6 : 0.1}
-              roughness={0.2}
-              metalness={0.8}
+              opacity={isCaptured ? 0.0 : 0.8} 
+              depthTest={false}
             />
           </mesh>
         );

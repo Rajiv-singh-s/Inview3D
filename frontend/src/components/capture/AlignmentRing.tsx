@@ -67,13 +67,15 @@ export const AlignmentRing: React.FC<AlignmentRingProps> = ({ dwellProgress, isA
           <div className={`w-1.5 h-1.5 rounded-full transition-colors duration-200 shadow-[0_0_8px_rgba(255,255,255,0.8)] ${isAligned ? 'bg-emerald-400' : 'bg-white'}`} />
         </div>
         
-        {/* Decorative outer crosshairs */}
         <div className="absolute w-8 h-8 opacity-40">
           <div className="absolute top-0 left-1/2 -ml-[0.5px] w-[1px] h-2 bg-white" />
           <div className="absolute bottom-0 left-1/2 -ml-[0.5px] w-[1px] h-2 bg-white" />
           <div className="absolute left-0 top-1/2 -mt-[0.5px] w-2 h-[1px] bg-white" />
           <div className="absolute right-0 top-1/2 -mt-[0.5px] w-2 h-[1px] bg-white" />
         </div>
+        
+        {/* White Framing Rectangle (like Polycam/RealityScan) */}
+        <div className="absolute w-64 h-80 border-2 border-white/40 pointer-events-none rounded-xl" />
       </div>
     </div>
   );
