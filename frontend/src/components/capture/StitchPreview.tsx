@@ -1,12 +1,14 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useCaptureStore } from '@/store/captureStore';
 import { targetToWorldPos } from '@/engine/SphereTargets';
 
 const ProjectedFrame = ({ frame }: { frame: any }) => {
+  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera;
+  
   const texture = useMemo(() => {
     if (!frame.thumbnailUrl || frame.thumbnailUrl === '') return null;
     try {
@@ -17,13 +19,17 @@ const ProjectedFrame = ({ frame }: { frame: any }) => {
     }
   }, [frame.thumbnailUrl]);
 
-  // Project at radius 4.5
-  const pos = targetToWorldPos(frame.pose?.yaw || 0, frame.pose?.pitch || 0, 4.5);
+  const radius = 4.5;
+  const pos = targetToWorldPos(frame.pose?.yaw || 0, frame.pose?.pitch || 0, radius);
   const position = new THREE.Vector3(...pos);
+
+  // Exact math to match FOV and stitch perfectly
+  const height = 2 * Math.tan((camera.fov / 2) * (Math.PI / 180)) * radius;
+  const width = height * camera.aspect;
 
   return (
     <mesh position={position} onUpdate={(self) => self.lookAt(0, 0, 0)}>
-      <planeGeometry args={[1.8, 1.35]} />
+      <planeGeometry args={[width, height]} />
       {texture ? (
         <meshBasicMaterial map={texture} side={THREE.DoubleSide} transparent opacity={0.9} />
       ) : (
