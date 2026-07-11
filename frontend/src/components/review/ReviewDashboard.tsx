@@ -19,7 +19,8 @@ export interface ReviewDashboardProps {
 export const ReviewDashboard: React.FC<ReviewDashboardProps> = ({ onPost, onBack }) => {
   const [isPrivate, setIsPrivate] = useState(false);
   
-  const frames = useCaptureStore((state) => state.getCapturedArray());
+  const capturedFrames = useCaptureStore((state) => state.capturedFrames);
+  const frames = Object.values(capturedFrames);
   const frameCount = frames.length;
 
   return (

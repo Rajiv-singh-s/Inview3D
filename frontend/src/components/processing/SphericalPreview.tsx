@@ -29,7 +29,8 @@ const ProjectedFrame = ({ frame }: { frame: any }) => {
 
 const SpinningScene = () => {
   const groupRef = useRef<THREE.Group>(null);
-  const frames = useCaptureStore((state) => state.getCapturedArray());
+  const capturedFrames = useCaptureStore((state) => state.capturedFrames);
+  const frames = Object.values(capturedFrames);
 
   useFrame((state, delta) => {
     if (groupRef.current) {
