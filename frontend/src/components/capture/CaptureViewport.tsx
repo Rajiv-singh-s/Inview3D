@@ -32,7 +32,7 @@ function readAim(e: DeviceOrientationEvent): { yaw: number; pitch: number } | nu
   const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
   const yawRaw = typeof webkit === 'number' ? webkit : e.alpha != null ? 360 - e.alpha : null;
   if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return null;
-  return { yaw: ((yawRaw % 360) + 360) % 360, pitch: Math.max(-90, Math.min(90, e.beta - 90)) };
+  return { yaw: ((yawRaw % 360) + 360) % 360, pitch: Math.max(-90, Math.min(90, 90 - e.beta)) };
 }
 
 /**
