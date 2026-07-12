@@ -22,8 +22,14 @@ const ProjectedFrame = ({ frame }: { frame: CapturedFrame }) => {
   const pos = targetToWorldPos(frame.pose?.yaw || 0, frame.pose?.pitch || 0, radius);
 
   // Calculate full screen world height/width at this radius
-  const height = 2 * Math.tan((camera.fov / 2) * (Math.PI / 180)) * radius;
-  const width = height * camera.aspect;
+  const fullHeight = 2 * Math.tan((camera.fov / 2) * (Math.PI / 180)) * radius;
+  const fullWidth = fullHeight * camera.aspect;
+
+  // The viewfinder white box is 75% width and 55% height of the screen.
+  // The captured photo is exactly cropped to this viewfinder.
+  // Therefore, the plane MUST perfectly match these exact proportions to stitch seamlessly!
+  const height = fullHeight * 0.55;
+  const width = fullWidth * 0.75;
 
   return (
     <mesh position={pos} onUpdate={(self) => self.lookAt(0, 0, 0)}>

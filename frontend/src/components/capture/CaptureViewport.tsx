@@ -64,14 +64,39 @@ export const CaptureViewport: React.FC = () => {
 
   const capture = useCallback(
     (targetId: number) => {
-      const video = videoRef.current;
-      if (!video || video.videoWidth === 0 || capturingRef.current) return;
+      if (!videoRef.current || capturingRef.current) return;
       capturingRef.current = true;
+      
+      const video = videoRef.current;
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const cw = video.clientWidth;
+      const ch = video.clientHeight;
+
+      if (!vw || !vh || !cw || !ch) return;
+
+      // Calculate object-cover crop
+      const scale = Math.max(cw / vw, ch / vh);
+      const scaledW = vw * scale;
+      const scaledH = vh * scale;
+
+      const offsetX = (scaledW - cw) / 2;
+      const offsetY = (scaledH - ch) / 2;
+
+      const cropX = offsetX / scale;
+      const cropY = offsetY / scale;
+      const cropW = cw / scale;
+      const cropH = ch / scale;
 
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext('2d')!.drawImage(video, 0, 0);
+      canvas.width = cropW;
+      canvas.height = cropH;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+      }
+      
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       const thumb = canvas.toDataURL('image/jpeg', 0.5);
       canvas.toBlob(
         (blob) => {
