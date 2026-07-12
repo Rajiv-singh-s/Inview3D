@@ -77,4 +77,11 @@ export const api = {
 
   /** Absolute URL of the trained 3D Gaussian Splat (.splat) file for a completed project. */
   captureSplatUrl: (id: string) => `${getApiBaseUrl()}/capture/${id}/splat`,
+
+  /** Absolute URL of the stitched 360° equirectangular panorama for a project. */
+  capturePanoramaUrl: (id: string) => `${getApiBaseUrl()}/capture/${id}/panorama`,
+
+  /** Poll processing status: { status, progress, error }. */
+  getCaptureStatus: (id: string) =>
+    fetch(`${getApiBaseUrl()}/capture/${id}/status`).then((r) => r.json()),
 };

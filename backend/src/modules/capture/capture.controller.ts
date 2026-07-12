@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Header,
   Param,
   UseInterceptors,
   UploadedFiles,
@@ -32,11 +33,14 @@ export class CaptureController {
     return this.captureService.storeCapture(files, name, location, poses, isPrivate);
   }
 
-  @Get(':id/splat')
-  async getSplat(@Param('id') id: string): Promise<StreamableFile> {
-    const stream = await this.captureService.getSplatStream(id);
+  /** GET /capture/:id/panorama — stream the stitched 360° equirectangular image. */
+  @Get(':id/panorama')
+  @Header('Content-Type', 'image/jpeg')
+  @Header('Cache-Control', 'public, max-age=31536000, immutable')
+  async getPanorama(@Param('id') id: string): Promise<StreamableFile> {
+    const stream = await this.captureService.getPanoramaStream(id);
     if (!stream) {
-      throw new NotFoundException(`Splat file for project ${id} not found.`);
+      throw new NotFoundException(`Panorama for project ${id} is not ready.`);
     }
     return new StreamableFile(stream);
   }

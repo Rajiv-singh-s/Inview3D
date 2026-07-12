@@ -3,57 +3,73 @@
 import React, { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ProcessingScreen } from '@/components/processing/ProcessingScreen';
+import { api } from '@/lib/api';
 
 function ProcessingPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const id = searchParams.get('id') || 'demo-id';
-  
+  const id = searchParams.get('id');
+
   const [progress, setProgress] = useState(0);
-  const [statusText, setStatusText] = useState('Initializing pipeline...');
+  const [statusText, setStatusText] = useState('Uploading photos…');
+  const [failed, setFailed] = useState<string | null>(null);
 
   useEffect(() => {
-    // In a real scenario, we would use TanStack React Query to poll the backend here.
-    // e.g. const { data } = useQuery(['captureStatus', id], () => fetchStatus(id), { refetchInterval: 2000 })
-    
-    // Simulating the polling progress:
-    let currentProgress = 0;
-    const interval = setInterval(() => {
-      currentProgress += (Math.random() * 8);
-      
-      if (currentProgress < 30) {
-        setStatusText('Extracting features...');
-      } else if (currentProgress < 60) {
-        setStatusText('Computing Structure from Motion...');
-      } else if (currentProgress < 90) {
-        setStatusText('Training Gaussian Splats...');
-      } else {
-        setStatusText('Finalizing model...');
-      }
+    if (!id) {
+      setFailed('No capture id.');
+      return;
+    }
+    let stop = false;
 
-      if (currentProgress >= 100) {
-        currentProgress = 100;
-        setProgress(100);
-        clearInterval(interval);
-        
-        setTimeout(() => {
-          // Navigate to viewer phase when complete
-          router.push(`/viewer/${id}`);
-        }, 1200);
-      } else {
-        setProgress(currentProgress);
-      }
-    }, 1200);
+    const poll = async () => {
+      try {
+        const s = await api.getCaptureStatus(id);
+        if (stop) return;
 
-    return () => clearInterval(interval);
+        setProgress(typeof s.progress === 'number' ? s.progress : 0);
+        if (s.status === 'completed') {
+          setStatusText('Loading 3D scene…');
+          setProgress(100);
+          setTimeout(() => router.push(`/viewer/${id}`), 800);
+          return; // stop polling
+        }
+        if (s.status === 'failed') {
+          setFailed(s.error || 'Reconstruction failed.');
+          return;
+        }
+        setStatusText((s.progress ?? 0) < 20 ? 'Preparing photos…' : 'Stitching your 360° room…');
+        setTimeout(poll, 1500);
+      } catch {
+        if (!stop) setTimeout(poll, 2000); // transient network error, keep trying
+      }
+    };
+    poll();
+    return () => {
+      stop = true;
+    };
   }, [id, router]);
+
+  if (failed) {
+    return (
+      <main className="fixed inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950 p-6 text-center text-white">
+        <p className="text-lg font-semibold text-red-300">Generation failed</p>
+        <p className="max-w-md text-sm text-slate-400">{failed}</p>
+        <button
+          onClick={() => router.push('/capture')}
+          className="mt-2 rounded-xl bg-indigo-500 px-5 py-2.5 font-medium"
+        >
+          Try again
+        </button>
+      </main>
+    );
+  }
 
   return <ProcessingScreen progress={progress} statusText={statusText} />;
 }
 
 export default function ProcessingPage() {
   return (
-    <Suspense fallback={<ProcessingScreen progress={0} statusText="Loading..." />}>
+    <Suspense fallback={<ProcessingScreen progress={0} statusText="Loading…" />}>
       <ProcessingPageContent />
     </Suspense>
   );

@@ -1,252 +1,308 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
-import { CameraController } from '@/engine/CameraController';
-import { FrameRingBuffer } from '@/engine/FrameRingBuffer';
-import { OrientationTracker, OrientationUpdate } from '@/engine/OrientationTracker';
-import { MotionGate } from '@/engine/MotionGate';
-import { nearestUncaptured } from '@/engine/SphereTargets';
-import { useCaptureStore } from '@/store/captureStore';
-import { StitchedWorld } from './StitchedWorld';
-import { DotOverlay } from './DotOverlay';
-import { AlignmentRing } from './AlignmentRing';
-import { CaptureHUD } from './CaptureHUD';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useCaptureStore } from '@/store/captureStore';
+
+/** 16 capture targets over the sphere: an 8-dot horizon ring + 4 up + 4 down. */
+const TARGETS: { id: number; yaw: number; pitch: number }[] = [
+  ...[0, 45, 90, 135, 180, 225, 270, 315].map((yaw, i) => ({ id: i, yaw, pitch: 0 })),
+  ...[0, 90, 180, 270].map((yaw, i) => ({ id: 8 + i, yaw, pitch: 40 })),
+  ...[0, 90, 180, 270].map((yaw, i) => ({ id: 12 + i, yaw, pitch: -40 })),
+];
+
+/** Half-FOV used to spread dots across the screen (visual guidance, not camera intrinsics). */
+const HALF_FOV = 55;
+/** A dot is "aligned" once within this many degrees of the reticle. */
+const TOLERANCE = 12;
+/** Hold aligned this long before the shot fires (matches the reference pie-fill). */
+const DWELL_MS = 350;
+
+function angleDelta(a: number, b: number): number {
+  return ((((b - a) % 360) + 540) % 360) - 180;
+}
+
+/** Read a device-orientation event as a (yaw, pitch) aim in degrees. */
+function readAim(e: DeviceOrientationEvent): { yaw: number; pitch: number } | null {
+  const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
+  const yawRaw = typeof webkit === 'number' ? webkit : e.alpha != null ? 360 - e.alpha : null;
+  if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return null;
+  return { yaw: ((yawRaw % 360) + 360) % 360, pitch: Math.max(-90, Math.min(90, e.beta - 90)) };
+}
 
 /**
- * The core orchestration component for the Capture phase.
- * Manages engine lifecycle, camera feed, WebGL masking, and the automated capture loop.
+ * Full-screen guided capture, matching the reference app: the live camera fills
+ * the viewport, green target dots float over it and move as you turn, and each
+ * dot auto-captures when it reaches the centre reticle. No shutter button.
  */
 export const CaptureViewport: React.FC = () => {
   const router = useRouter();
-  
-  const videoRef = useRef<HTMLVideoElement>(null);
-  
   const store = useCaptureStore();
-  const capturedIds = new Set(Object.keys(store.capturedFrames).map(Number));
-  
-  const [isAnchored, setIsAnchored] = useState(false);
-  const [activeTargetId, setActiveTargetId] = useState<number | null>(null);
-  const [currentAim, setCurrentAim] = useState({ yaw: 0, pitch: 0 });
-  const [isStable, setIsStable] = useState(false);
-  const [isAligned, setIsAligned] = useState(false);
-  const [dwellProgress, setDwellProgress] = useState(0);
-  const [isCapturedFlash, setIsCapturedFlash] = useState(false);
-  
-  const logicRefs = useRef({
-    cameraController: new CameraController(),
-    ringBuffer: new FrameRingBuffer(30),
-    motionGate: new MotionGate(0.8, 0.2),
-    orientationTracker: null as OrientationTracker | null,
-    animationFrameId: null as number | null,
-    dwellStart: 0,
-    currentAim: { yaw: 0, pitch: 0 },
-    activeTargetId: null as number | null,
-    capturedSet: {} as Record<number, boolean>,
-    isAnchored: false,
-  });
 
-  useEffect(() => {
-    Object.keys(store.capturedFrames).forEach(id => {
-      logicRefs.current.capturedSet[Number(id)] = true;
-    });
-    if (Object.keys(store.capturedFrames).length > 0) {
-      setIsAnchored(true);
-      logicRefs.current.isAnchored = true;
-    }
-  }, [store.capturedFrames]);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
-    const init = async () => {
-      try {
-        const refs = logicRefs.current;
-        await refs.cameraController.init();
-        
-        const stream = refs.cameraController.getStream();
-        if (stream && videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(console.warn);
-          
-          const track = stream.getVideoTracks()[0];
-          await refs.ringBuffer.start(track, videoRef.current);
-        }
+  // Live values read by the rAF loop (refs so the loop never goes stale).
+  const aimRef = useRef({ yaw: 0, pitch: 0 });
+  const baseYawRef = useRef<number | null>(null);
+  const capturedRef = useRef<Record<number, boolean>>({});
+  const dwellStartRef = useRef<number | null>(null);
+  const capturingRef = useRef(false);
 
-        refs.orientationTracker = new OrientationTracker((update: OrientationUpdate) => {
-          if (!isMounted) return;
-          refs.currentAim = { yaw: update.yaw, pitch: update.pitch };
-          setCurrentAim(refs.currentAim);
-        });
-        
-        // DO NOT START TRACKER YET! Wait for manual anchor.
+  const [started, setStarted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hasCompass, setHasCompass] = useState(false);
+  const [aim, setAim] = useState({ yaw: 0, pitch: 0 });
+  const [activeId, setActiveId] = useState<number | null>(null);
+  const [dwell, setDwell] = useState(0);
+  const [flash, setFlash] = useState(false);
+  const [count, setCount] = useState(0);
 
-        const loop = () => {
-          if (!isMounted) return;
-          refs.animationFrameId = requestAnimationFrame(loop);
+  // ---- capture a real frame + blob and store it --------------------------
+  const capture = useCallback(
+    (targetId: number) => {
+      const video = videoRef.current;
+      if (!video || video.videoWidth === 0 || capturingRef.current) return;
+      capturingRef.current = true;
 
-          const stable = refs.motionGate.isStable();
-          setIsStable(stable);
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d')!.drawImage(video, 0, 0);
+      const thumb = canvas.toDataURL('image/jpeg', 0.5);
 
-          if (!refs.isAnchored) {
-            // Before anchoring, we just show the camera feed and wait for user.
-            return;
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            capturedRef.current[targetId] = true;
+            store.addFrame({
+              targetId,
+              blob,
+              thumbnailUrl: thumb,
+              pose: { yaw: aimRef.current.yaw, pitch: aimRef.current.pitch, roll: 0, timestamp: Date.now() },
+              sharpness: 1,
+            });
+            setCount(Object.keys(capturedRef.current).length);
+            setFlash(true);
+            setTimeout(() => setFlash(false), 120);
           }
+          dwellStartRef.current = null;
+          setDwell(0);
+          setTimeout(() => (capturingRef.current = false), 350);
+        },
+        'image/jpeg',
+        0.9,
+      );
+    },
+    [store],
+  );
 
-          const nearest = nearestUncaptured(refs.currentAim, refs.capturedSet);
-          if (nearest) {
-            if (refs.activeTargetId !== nearest.id) {
-              refs.activeTargetId = nearest.id;
-              setActiveTargetId(nearest.id);
-            }
-            
-            // Widen threshold slightly for easier sweeping
-            const aligned = nearest.angularError < 12.0; 
-            if (isAligned !== aligned) setIsAligned(aligned);
-
-            // INSTANT CAPTURE: No dwell time, no stability check needed.
-            // Matches the video where 15 photos are taken in 7 seconds.
-            if (aligned) {
-              captureFrame(nearest.id);
-            } else {
-              setDwellProgress(0);
-            }
-          } else {
-            if (refs.activeTargetId !== null) {
-              refs.activeTargetId = null;
-              setActiveTargetId(null);
-            }
-          }
-        };
-        
-        loop();
-
-      } catch (err) {
-        console.error('Initialization error:', err);
+  // ---- start: request permissions on the user gesture (iOS needs this) ----
+  const start = useCallback(async () => {
+    setError(null);
+    try {
+      // Camera
+      const stream = await navigator.mediaDevices
+        .getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } }, audio: false })
+        .catch(() => navigator.mediaDevices.getUserMedia({ video: true, audio: false }));
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => undefined);
       }
-    };
-
-    init();
-
-    return () => {
-      isMounted = false;
-      const refs = logicRefs.current;
-      if (refs.animationFrameId) cancelAnimationFrame(refs.animationFrameId);
-      refs.orientationTracker?.stop();
-      refs.ringBuffer.stop();
-      refs.motionGate.destroy();
-      refs.cameraController.destroy();
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      // Orientation (iOS 13+ gate)
+      const D = window.DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> };
+      if (typeof D?.requestPermission === 'function') {
+        try {
+          await D.requestPermission();
+        } catch {
+          /* guidance optional */
+        }
+      }
+      setStarted(true);
+    } catch (err) {
+      setError(`Could not access the camera: ${(err as Error).message}`);
+    }
   }, []);
 
-  const captureFrame = (targetId: number) => {
-    // Account for human/device delay by grabbing an older frame
-    const frameData = logicRefs.current.ringBuffer.getFrameAgo(150);
-    let blobUrl = '';
-    
-    if (frameData && frameData instanceof HTMLCanvasElement) {
-      blobUrl = frameData.toDataURL('image/jpeg', 0.8);
-    } else if (frameData && 'close' in frameData) {
-      const cvs = document.createElement('canvas');
-      cvs.width = frameData.displayWidth;
-      cvs.height = frameData.displayHeight;
-      const ctx = cvs.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(frameData as any, 0, 0);
-        blobUrl = cvs.toDataURL('image/jpeg', 0.8);
-      }
-      frameData.close();
-    }
-    
-    setIsCapturedFlash(true);
-    setTimeout(() => setIsCapturedFlash(false), 200);
+  // ---- orientation ---------------------------------------------------------
+  useEffect(() => {
+    if (!started) return;
+    const onOrientation = (e: DeviceOrientationEvent) => {
+      const raw = readAim(e);
+      if (!raw) return;
+      setHasCompass(true);
+      if (baseYawRef.current == null) baseYawRef.current = raw.yaw; // origin = start heading
+      const yaw = ((raw.yaw - baseYawRef.current) % 360 + 360) % 360;
+      aimRef.current = { yaw, pitch: raw.pitch };
+      setAim(aimRef.current);
+    };
+    window.addEventListener('deviceorientation', onOrientation, true);
+    return () => window.removeEventListener('deviceorientation', onOrientation, true);
+  }, [started]);
 
-    store.addFrame({
-      targetId,
-      thumbnailUrl: blobUrl,
-      pose: { yaw: logicRefs.current.currentAim.yaw, pitch: logicRefs.current.currentAim.pitch, roll: 0, timestamp: Date.now() },
-      blob: null as any,
-      sharpness: 1
+  // ---- auto-capture loop ---------------------------------------------------
+  useEffect(() => {
+    if (!started) return;
+    let raf = 0;
+    const tick = () => {
+      // Nearest uncaptured target to the current aim.
+      let best: { id: number; err: number } | null = null;
+      for (const t of TARGETS) {
+        if (capturedRef.current[t.id]) continue;
+        const dYaw = angleDelta(aimRef.current.yaw, t.yaw) * Math.cos((aimRef.current.pitch * Math.PI) / 180);
+        const err = Math.hypot(dYaw, t.pitch - aimRef.current.pitch);
+        if (!best || err < best.err) best = { id: t.id, err };
+      }
+      setActiveId(best?.id ?? null);
+
+      if (best && best.err <= TOLERANCE && !capturingRef.current) {
+        const now = performance.now();
+        if (dwellStartRef.current == null) dwellStartRef.current = now;
+        const held = now - dwellStartRef.current;
+        setDwell(Math.min(1, held / DWELL_MS));
+        if (held >= DWELL_MS) capture(best.id);
+      } else {
+        dwellStartRef.current = null;
+        setDwell(0);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [started, capture]);
+
+  // ---- cleanup -------------------------------------------------------------
+  useEffect(() => {
+    return () => streamRef.current?.getTracks().forEach((t) => t.stop());
+  }, []);
+
+  // ---- project the dots onto the screen ------------------------------------
+  const dots = useMemo(() => {
+    if (!hasCompass) return [];
+    return TARGETS.flatMap((t) => {
+      const dYaw = angleDelta(aim.yaw, t.yaw);
+      const dPitch = t.pitch - aim.pitch;
+      if (Math.abs(dYaw) > HALF_FOV || Math.abs(dPitch) > HALF_FOV) return [];
+      return [{
+        id: t.id,
+        x: 50 + (dYaw / HALF_FOV) * 46,
+        y: 50 - (dPitch / HALF_FOV) * 44,
+        captured: !!capturedRef.current[t.id],
+      }];
     });
-    
-    logicRefs.current.capturedSet[targetId] = true;
-    logicRefs.current.dwellStart = 0;
-  };
+  }, [aim, hasCompass, count]);
 
-  const handleManualAnchor = async () => {
-    try {
-      if (logicRefs.current.orientationTracker) {
-        await logicRefs.current.orientationTracker.start();
-      }
-      
-      setIsAnchored(true);
-      logicRefs.current.isAnchored = true;
-      
-      // Instantly capture the first frame (target 0) since we are starting here.
-      setTimeout(() => {
-        captureFrame(0);
-      }, 50);
-
-    } catch (e) {
-      console.error("Failed to anchor", e);
-    }
-  };
-
-  const handleCancel = () => {
-    store.resetCapture();
-    router.push('/'); 
-  };
-
-  const handleReview = () => {
-    router.push('/review');
-  };
-
-  // Calculate clip-path dynamically based on screen size to make a nice center rectangle
-  // e.g. 20% from top/bottom, 15% from left/right
-  const clipStyle = {
-    clipPath: 'inset(25% 15% 25% 15%)',
-    WebkitClipPath: 'inset(25% 15% 25% 15%)'
-  };
+  const aligned = dwell > 0;
 
   return (
-    <div className="relative w-full h-full bg-black overflow-hidden touch-none select-none">
-      
-      {/* LAYER 1: Stitched World (Black background, filled with photos) */}
-      <div className="absolute inset-0 z-0">
-        {isAnchored && <StitchedWorld currentAim={currentAim} capturedFrames={store.capturedFrames} />}
-      </div>
+    <div className="relative h-full w-full overflow-hidden bg-black touch-none select-none">
+      {/* Full-screen live camera */}
+      <video ref={videoRef} className="absolute inset-0 h-full w-full object-cover" playsInline muted autoPlay />
 
-      {/* LAYER 2: Live Camera Viewfinder (Native HTML Video, clipped to center) */}
-      <video 
-        ref={videoRef} 
-        className="absolute inset-0 w-full h-full object-cover z-10" 
-        style={clipStyle}
-        playsInline 
-        muted 
-        autoPlay 
-      />
+      {/* Start gate (also satisfies the iOS motion-permission gesture) */}
+      {!started && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-slate-950/95 p-6 text-center text-white">
+          <h2 className="text-xl font-bold">Capture your room</h2>
+          <p className="max-w-xs text-sm text-slate-400">
+            Stand in one spot and slowly turn. Line up each green dot with the centre — photos are
+            taken automatically.
+          </p>
+          <button onClick={start} className="rounded-2xl bg-indigo-500 px-8 py-3 font-semibold">
+            Start capture
+          </button>
+          {error && <p className="text-sm text-red-300">{error}</p>}
+        </div>
+      )}
 
-      {/* Center White Rectangle Border (matches clip-path) */}
-      <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center">
-        <div className="w-[70%] h-[50%] border-2 border-white/80" />
-      </div>
-
-      {/* LAYER 3: Green Dots (Transparent 3D Overlay) */}
-      <div className="absolute inset-0 z-30 pointer-events-none">
-        {isAnchored && <DotOverlay activeTargetId={activeTargetId} capturedIds={capturedIds} currentAim={currentAim} />}
-      </div>
-      
-      {/* UI LAYER */}
-      <div className="absolute inset-0 z-40 pointer-events-none">
-        <AlignmentRing dwellProgress={dwellProgress} isAligned={isAligned} isCaptured={isCapturedFlash} />
-        <CaptureHUD 
-          onCancel={handleCancel} 
-          onReview={handleReview} 
-          onManualSnap={!isAnchored ? handleManualAnchor : undefined}
-          isStable={isStable} 
-          guidanceText={!isAnchored ? "Shoot all photos from the same spot as your initial photo to ensure an optimal result." : undefined}
+      {/* Floating target dots */}
+      {started && dots.map((d) => (
+        <div
+          key={d.id}
+          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full transition-all duration-75"
+          style={{
+            left: `${d.x}%`,
+            top: `${d.y}%`,
+            width: d.id === activeId ? 26 : 18,
+            height: d.id === activeId ? 26 : 18,
+            backgroundColor: d.captured ? 'rgba(255,255,255,0.9)' : 'rgba(34,197,94,0.9)',
+            boxShadow: d.id === activeId ? '0 0 0 3px rgba(255,255,255,0.6)' : 'none',
+          }}
         />
-      </div>
+      ))}
+
+      {/* Center white square + reticle with pie-fill dwell */}
+      {started && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="relative h-[46%] w-[64%] border-2 border-white/80">
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+              <div className={`grid h-20 w-20 place-items-center rounded-full border-2 ${aligned ? 'border-green-400' : 'border-white/70'}`}>
+                <div className={`h-2 w-2 rounded-full ${aligned ? 'bg-green-400' : 'bg-white/80'}`} />
+                {aligned && (
+                  <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 36 36">
+                    <path fill="none" stroke="#4ade80" strokeWidth="3" strokeLinecap="round"
+                      strokeDasharray={`${dwell * 100}, 100`}
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                  </svg>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Capture flash */}
+      <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100" style={{ opacity: flash ? 0.6 : 0 }} />
+
+      {/* Top HUD */}
+      {started && (
+        <div className="absolute inset-x-0 top-0 flex items-center justify-between p-4">
+          <button
+            onClick={() => {
+              store.resetCapture();
+              router.push('/');
+            }}
+            className="grid h-10 w-10 place-items-center rounded-full bg-white/85 text-slate-900"
+            aria-label="Cancel"
+          >
+            ✕
+          </button>
+          <button
+            onClick={() => {
+              const ids = Object.keys(capturedRef.current).map(Number).sort((a, b) => b - a);
+              if (ids.length) {
+                store.removeFrame(ids[0]);
+                delete capturedRef.current[ids[0]];
+                setCount(Object.keys(capturedRef.current).length);
+              }
+            }}
+            className="grid h-10 w-10 place-items-center rounded-full bg-white/85 text-slate-900"
+            aria-label="Undo"
+          >
+            ↺
+          </button>
+        </div>
+      )}
+
+      {/* Bottom HUD: instruction + progress */}
+      {started && (
+        <div className="absolute inset-x-0 bottom-0 space-y-2 bg-gradient-to-t from-black/80 to-transparent p-4 text-white">
+          <p className="text-center text-sm font-medium">
+            {count === 0 ? 'Shoot all photos from the same spot to ensure an optimal result.' : 'Aim at the floating dots'}
+          </p>
+          <div className="flex items-center gap-3">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/25">
+              <div className="h-full rounded-full bg-green-500 transition-[width]" style={{ width: `${(count / 16) * 100}%` }} />
+            </div>
+            <span className="text-sm font-semibold tabular-nums">{count} of 16</span>
+          </div>
+          {!hasCompass && (
+            <p className="text-center text-[11px] text-white/60">
+              No motion sensor detected — dots need a phone gyroscope.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 };
