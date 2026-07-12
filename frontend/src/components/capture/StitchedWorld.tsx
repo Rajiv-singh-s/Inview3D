@@ -60,18 +60,14 @@ const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number
     <>
       {TARGETS.map((target) => {
         const isCaptured = capturedIds.has(target.id);
-        const isActive = activeTargetId === target.id;
         
         if (isCaptured) return null; // Hide captured dots entirely
         
         const position = targetToWorldPos(target.yaw, target.pitch, 4.9);
         
         return (
-          <Html key={target.id} position={position} center style={{ zIndex: 20 }}>
-            <div 
-              className={`rounded-full transition-all duration-200 ${isActive ? 'bg-blue-500 w-7 h-7 shadow-[0_0_15px_rgba(59,130,246,0.8)]' : 'bg-green-500 w-5 h-5'}`} 
-              style={{ opacity: 0.9, border: '2px solid white' }} 
-            />
+          <Html key={target.id} position={position} center style={{ zIndex: 30 }}>
+            <div className="rounded-full transition-all duration-200 bg-[#22c55e] w-[22px] h-[22px] shadow-sm shadow-black/50" />
           </Html>
         );
       })}
@@ -79,16 +75,18 @@ const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number
   );
 };
 
-export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capturedIds }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame>, activeTargetId: number | null, capturedIds: Set<number> }) => {
+export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capturedIds, mode }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame>, activeTargetId: number | null, capturedIds: Set<number>, mode?: 'background' | 'foreground' }) => {
   const frames = Object.values(capturedFrames);
+  const isBg = mode === 'background' || mode == null;
+  const isFg = mode === 'foreground' || mode == null;
   return (
     <Canvas camera={{ fov: 65, position: [0, 0, 0] }} gl={{ alpha: true }}>
       <ambientLight intensity={1.0} />
       <WorldCamera currentAim={currentAim} />
-      {frames.map((frame) => (
+      {isBg && frames.map((frame) => (
         <ProjectedFrame key={frame.targetId} frame={frame} />
       ))}
-      <TargetSpheres activeTargetId={activeTargetId} capturedIds={capturedIds} />
+      {isFg && <TargetSpheres activeTargetId={activeTargetId} capturedIds={capturedIds} />}
     </Canvas>
   );
 };

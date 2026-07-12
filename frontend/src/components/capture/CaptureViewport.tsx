@@ -209,127 +209,145 @@ export const CaptureViewport: React.FC = () => {
   }, [count, router]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-black touch-none select-none">
+    <div className="relative h-full w-full overflow-hidden bg-black touch-none select-none font-sans">
       
-      {/* Start gate (also satisfies the iOS motion-permission gesture) */}
+      {/* Start gate */}
       {!started && (
-        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-slate-950 p-6 text-center text-white">
-          <h2 className="text-xl font-bold">Capture your room</h2>
-          <p className="max-w-xs text-sm text-slate-400">
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-black p-6 text-center text-white">
+          <h2 className="text-2xl font-bold">Capture your room</h2>
+          <p className="max-w-xs text-[15px] text-white/70">
             Stand in one spot and slowly turn. Line each green dot up with the centre — photos are
             taken automatically.
           </p>
-          <button onClick={start} className="rounded-2xl bg-indigo-500 px-8 py-3 font-semibold">
+          <button onClick={start} className="mt-4 rounded-full bg-[#4040ff] px-8 py-3.5 font-bold text-white tracking-wide">
             Start capture
           </button>
-          {error && <p className="text-sm text-red-300">{error}</p>}
+          {error && <p className="text-sm text-red-400">{error}</p>}
         </div>
       )}
 
-      {/* LAYER 0: FULL SCREEN LIVE CAMERA FEED */}
+      {/* LAYER 0: Background AR (Captured Photos in the Void) */}
       {started && (
-        <div className="absolute inset-0 z-0">
-          <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
-        </div>
-      )}
-
-      {/* LAYER 1: 3D AR Background (transparent canvas overlay) */}
-      {started && (
-        <div className="absolute inset-0 z-10 pointer-events-none">
+        <div className="absolute inset-0 z-0 bg-black">
           <StitchedWorld 
             currentAim={aim} 
             capturedFrames={store.capturedFrames} 
-            activeTargetId={nearest?.id ?? null}
+            activeTargetId={null}
             capturedIds={new Set(Object.keys(capturedRef.current).map(Number))}
+            mode="background"
           />
         </div>
       )}
 
-      {/* LAYER 2: 2D Viewfinder Box (64% x 50% overlay) */}
+      {/* LAYER 1: Live Video Window */}
       {started && (
         <div
-          className="pointer-events-none absolute border-[3px] border-white/80 shadow-[0_0_20px_rgba(255,255,255,0.2)] rounded-2xl z-20"
+          className="absolute z-10 overflow-hidden bg-black"
+          style={{ left: '50%', top: '50%', width: '64%', height: '50%', transform: 'translate(-50%, -50%)' }}
+        >
+          <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
+        </div>
+      )}
+
+      {/* LAYER 2: White Viewfinder Border */}
+      {started && (
+        <div
+          className="pointer-events-none absolute z-20 border-[2px] border-white/90"
           style={{ left: '50%', top: '50%', width: '64%', height: '50%', transform: 'translate(-50%, -50%)' }}
         />
       )}
 
-      {/* Centre reticle with directional arrow / green pie-fill */}
+      {/* LAYER 3: Foreground AR (Target Dots over the video) */}
       {started && (
-        <div
-          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-30"
-          style={{ left: '50%', top: '50%' }}
-        >
-          <div className={`relative grid h-16 w-16 place-items-center rounded-full border-2 ${aligned ? 'border-green-400 bg-green-500/25' : 'border-white/80'}`}>
-            <div className={`h-2.5 w-2.5 rounded-full ${aligned ? 'bg-green-400' : 'bg-white/80'}`} />
-            {aligned && (
-              <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 36 36">
-                <path fill="none" stroke="#4ade80" strokeWidth="3" strokeLinecap="round"
-                  strokeDasharray={`${dwell * 100}, 100`}
-                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
-              </svg>
-            )}
-            {arrowDeg != null && (
-              <div className="absolute" style={{ transform: `rotate(${arrowDeg}deg) translateX(26px)` }}>
-                <span className="text-lg font-bold text-green-400">›</span>
-              </div>
-            )}
-          </div>
+        <div className="absolute inset-0 z-30 pointer-events-none">
+          <StitchedWorld 
+            currentAim={aim} 
+            capturedFrames={{}} 
+            activeTargetId={nearest?.id ?? null}
+            capturedIds={new Set(Object.keys(capturedRef.current).map(Number))}
+            mode="foreground"
+          />
         </div>
       )}
 
-      {/* Capture flash */}
-      <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100 z-40" style={{ opacity: flash ? 0.5 : 0 }} />
-
-      {/* Top HUD */}
+      {/* LAYER 4: Reticle & UI */}
       {started && (
-        <div className="absolute inset-x-0 top-0 flex items-center justify-between p-6 z-50">
-          <button
-            onClick={() => {
-              const ids = Object.keys(capturedRef.current).map(Number).sort((a, b) => b - a);
-              if (ids.length) {
-                store.removeFrame(ids[0]);
-                delete capturedRef.current[ids[0]];
-                setCount(Object.keys(capturedRef.current).length);
-              }
-            }}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 backdrop-blur-md text-white text-xl border border-white/30"
-            aria-label="Undo"
+        <>
+          {/* Centre reticle */}
+          <div
+            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-40"
+            style={{ left: '50%', top: '50%' }}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
-          </button>
-          <button
-            onClick={() => {
-              store.resetCapture();
-              router.push('/');
-            }}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 backdrop-blur-md text-white border border-white/30"
-            aria-label="Cancel"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-          </button>
-        </div>
-      )}
-
-      {/* Bottom HUD: hint / instruction + progress */}
-      {started && (
-        <div className="absolute inset-x-0 bottom-0 z-50 p-6 pt-12 bg-gradient-to-t from-black/80 via-black/40 to-transparent">
-          <p className="text-center text-[13px] font-bold text-white mb-6 tracking-wide drop-shadow-md">
-            {count === 0
-              ? 'Shoot all photos from the same spot as your initial photo to ensure an optimal result.'
-              : (hint ?? 'Hold steady…')}
-          </p>
-          <div className="flex items-center gap-4">
-            <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/20 backdrop-blur-md border border-white/10">
-              <div className="h-full rounded-full bg-green-500 transition-all duration-300" style={{ width: `${(count / 16) * 100}%` }} />
+            <div className="relative grid h-[70px] w-[70px] place-items-center rounded-full border-[3px] border-white shadow-lg shadow-black/50">
+              {aligned && (
+                <svg className="absolute inset-0 h-full w-full -rotate-90 scale-90" viewBox="0 0 36 36">
+                  <path fill="#22c55e"
+                    strokeDasharray={`${dwell * 100}, 100`}
+                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    stroke="none"
+                  />
+                  <circle cx="18" cy="18" r="15.9155" fill="none" stroke="#22c55e" strokeWidth="4" strokeDasharray={`${dwell * 100}, 100`} />
+                </svg>
+              )}
+              {arrowDeg != null && (
+                <div className="absolute" style={{ transform: `rotate(${arrowDeg}deg) translateX(45px)` }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-md">
+                    <path d="M9 18l6-6-6-6" />
+                  </svg>
+                </div>
+              )}
             </div>
-            <span className="text-[13px] font-bold text-white tabular-nums w-12 text-right">{count} of 16</span>
           </div>
-          {!hasCompass && (
-            <p className="text-center text-[11px] text-white/60 mt-2">
-              No motion sensor detected — the dots need a phone gyroscope.
+
+          {/* Capture flash */}
+          <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100 z-50" style={{ opacity: flash ? 0.7 : 0 }} />
+
+          {/* Top HUD */}
+          <div className="absolute inset-x-0 top-0 flex items-center justify-between p-6 pt-10 z-50">
+            <button
+              onClick={() => {
+                const ids = Object.keys(capturedRef.current).map(Number).sort((a, b) => b - a);
+                if (ids.length) {
+                  store.removeFrame(ids[0]);
+                  delete capturedRef.current[ids[0]];
+                  setCount(Object.keys(capturedRef.current).length);
+                }
+              }}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-black drop-shadow-md"
+              aria-label="Undo"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+            </button>
+            <button
+              onClick={() => {
+                store.resetCapture();
+                router.push('/');
+              }}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500 text-white drop-shadow-md"
+              aria-label="Cancel"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+
+          {/* Bottom HUD */}
+          <div className="absolute inset-x-0 bottom-0 z-50 pb-8 px-6 flex flex-col items-center justify-end h-40">
+            <p className="text-center text-[15px] text-white/90 mb-8 max-w-sm drop-shadow-md leading-snug">
+              Shoot all photos from the same spot as your initial photo to ensure an optimal result.
             </p>
-          )}
-        </div>
+            <div className="flex items-center gap-3 w-full max-w-sm">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
+                <div className="h-full rounded-full bg-green-500 transition-all duration-300" style={{ width: `${(count / 16) * 100}%` }} />
+              </div>
+              <span className="text-[13px] font-bold text-white tabular-nums w-12 text-right">{count} of 16</span>
+            </div>
+            {!hasCompass && (
+              <p className="text-center text-[11px] text-white/50 mt-4">
+                No motion sensor detected — the dots need a phone gyroscope.
+              </p>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
