@@ -27,9 +27,11 @@ function angleDelta(a: number, b: number): number {
 function readAim(e: DeviceOrientationEvent): { yaw: number; pitch: number } | null {
   const webkit = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
   const yawRaw = typeof webkit === 'number' ? webkit : e.alpha != null ? 360 - e.alpha : null;
-  if (yawRaw == null || Number.isNaN(yawRaw) || e.beta == null) return null;
+  if (yawRaw == null || Number.isNaN(yawRaw)) return null;
   // Phone upright (portrait) → beta ≈ 90 → pitch 0; tilt up to the ceiling → pitch +.
-  return { yaw: ((yawRaw % 360) + 360) % 360, pitch: Math.max(-90, Math.min(90, e.beta - 90)) };
+  // Some devices omit beta; fall back to a level pitch so the horizon dots still show.
+  const pitch = e.beta != null ? Math.max(-90, Math.min(90, e.beta - 90)) : 0;
+  return { yaw: ((yawRaw % 360) + 360) % 360, pitch };
 }
 
 /**
@@ -98,26 +100,34 @@ export const CaptureViewport: React.FC = () => {
     [store],
   );
 
+  /** Requests motion access. On iOS this MUST run first in the tap gesture. */
+  const requestMotion = useCallback(async () => {
+    const D = window.DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> };
+    if (typeof D?.requestPermission === 'function') {
+      try {
+        await D.requestPermission();
+      } catch {
+        /* denied — capture still runs, just without dot guidance */
+      }
+    }
+  }, []);
+
   const start = useCallback(async () => {
     setError(null);
+    // 1) Motion permission FIRST — an `await getUserMedia` before this breaks the
+    //    iOS user-gesture requirement and silently kills device orientation.
+    await requestMotion();
+    // 2) Camera.
     try {
       const stream = await navigator.mediaDevices
         .getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } }, audio: false })
         .catch(() => navigator.mediaDevices.getUserMedia({ video: true, audio: false }));
       streamRef.current = stream;
-      const D = window.DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> };
-      if (typeof D?.requestPermission === 'function') {
-        try {
-          await D.requestPermission();
-        } catch {
-          /* optional */
-        }
-      }
       setStarted(true);
     } catch (err) {
       setError(`Could not access the camera: ${(err as Error).message}`);
     }
-  }, []);
+  }, [requestMotion]);
 
   // attach the stream once the <video> mounts
   useEffect(() => {
@@ -139,7 +149,12 @@ export const CaptureViewport: React.FC = () => {
       setAim(aimRef.current);
     };
     window.addEventListener('deviceorientation', onOrientation, true);
-    return () => window.removeEventListener('deviceorientation', onOrientation, true);
+    // Some Android builds only fire the absolute variant.
+    window.addEventListener('deviceorientationabsolute', onOrientation as EventListener, true);
+    return () => {
+      window.removeEventListener('deviceorientation', onOrientation, true);
+      window.removeEventListener('deviceorientationabsolute', onOrientation as EventListener, true);
+    };
   }, [started]);
 
   const nearest = useMemo(() => {
@@ -234,7 +249,7 @@ export const CaptureViewport: React.FC = () => {
           {/* Large green target dots */}
           {dots.map((d) => {
             const active = d.id === nearest?.id;
-            const size = active ? 42 : 34;
+            const size = active ? 52 : 44;
             return (
               <div
                 key={d.id}
@@ -314,9 +329,28 @@ export const CaptureViewport: React.FC = () => {
               <span className="text-sm font-semibold tabular-nums">{count} of 16</span>
             </div>
             {!hasCompass && (
-              <p className="text-center text-[11px] text-white/60">
-                No motion sensor detected — the dots need a phone gyroscope.
-              </p>
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-center text-[12px] text-amber-300">
+                  Motion sensor not active — dots need it. Tap Enable, or capture manually.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={requestMotion}
+                    className="pointer-events-auto rounded-full bg-white/90 px-4 py-1.5 text-xs font-semibold text-slate-900"
+                  >
+                    Enable motion
+                  </button>
+                  <button
+                    onClick={() => {
+                      const next = TARGETS.find((t) => !capturedRef.current[t.id]);
+                      if (next) capture(next.id);
+                    }}
+                    className="pointer-events-auto rounded-full bg-green-500 px-4 py-1.5 text-xs font-semibold text-white"
+                  >
+                    Capture
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </>
