@@ -24,18 +24,14 @@ const ProjectedFrame = ({ frame }: { frame: CapturedFrame }) => {
   // Calculate full screen world height/width at this radius
   const height = 2 * Math.tan((camera.fov / 2) * (Math.PI / 180)) * radius;
   const width = height * camera.aspect;
-  
-  // Scale down to match the 64% x 50% central viewfinder rectangle
-  const rectHeight = height * 0.50;
-  const rectWidth = width * 0.64;
 
   return (
     <mesh position={pos} onUpdate={(self) => self.lookAt(0, 0, 0)}>
-      <planeGeometry args={[rectWidth, rectHeight]} />
+      <planeGeometry args={[width, height]} />
       {texture ? (
-        <meshBasicMaterial map={texture} side={THREE.DoubleSide} transparent opacity={1.0} />
+        <meshBasicMaterial map={texture} side={THREE.DoubleSide} transparent opacity={0.9} />
       ) : (
-        <meshBasicMaterial color="#222" side={THREE.DoubleSide} />
+        <meshBasicMaterial color="#222" side={THREE.DoubleSide} transparent opacity={0.5} />
       )}
     </mesh>
   );
@@ -86,8 +82,7 @@ const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number
 export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capturedIds }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame>, activeTargetId: number | null, capturedIds: Set<number> }) => {
   const frames = Object.values(capturedFrames);
   return (
-    <Canvas camera={{ fov: 65, position: [0, 0, 0] }}>
-      <color attach="background" args={['#000000']} />
+    <Canvas camera={{ fov: 65, position: [0, 0, 0] }} gl={{ alpha: true }}>
       <ambientLight intensity={1.0} />
       <WorldCamera currentAim={currentAim} />
       {frames.map((frame) => (

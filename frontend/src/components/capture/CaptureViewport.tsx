@@ -206,18 +206,7 @@ export const CaptureViewport: React.FC = () => {
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black touch-none select-none">
-      {/* LAYER 0: The 3D AR Background of captured photos and Target Dots */}
-      {started && (
-        <div className="absolute inset-0 z-0">
-          <StitchedWorld 
-            currentAim={aim} 
-            capturedFrames={store.capturedFrames} 
-            activeTargetId={nearest?.id ?? null}
-            capturedIds={new Set(Object.keys(capturedRef.current).map(Number))}
-          />
-        </div>
-      )}
-
+      
       {/* Start gate (also satisfies the iOS motion-permission gesture) */}
       {!started && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-slate-950 p-6 text-center text-white">
@@ -233,14 +222,31 @@ export const CaptureViewport: React.FC = () => {
         </div>
       )}
 
-      {/* Camera box (centered, bordered) */}
+      {/* LAYER 0: FULL SCREEN LIVE CAMERA FEED */}
       {started && (
-        <div
-          className="absolute overflow-hidden border-[3px] border-white/80 shadow-[0_0_20px_rgba(255,255,255,0.2)] rounded-2xl z-10 bg-transparent"
-          style={{ left: '50%', top: '50%', width: '64%', height: '50%', transform: 'translate(-50%, -50%)' }}
-        >
+        <div className="absolute inset-0 z-0">
           <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
         </div>
+      )}
+
+      {/* LAYER 1: 3D AR Background (transparent canvas overlay) */}
+      {started && (
+        <div className="absolute inset-0 z-10 pointer-events-none">
+          <StitchedWorld 
+            currentAim={aim} 
+            capturedFrames={store.capturedFrames} 
+            activeTargetId={nearest?.id ?? null}
+            capturedIds={new Set(Object.keys(capturedRef.current).map(Number))}
+          />
+        </div>
+      )}
+
+      {/* LAYER 2: 2D Viewfinder Box (64% x 50% overlay) */}
+      {started && (
+        <div
+          className="pointer-events-none absolute border-[3px] border-white/80 shadow-[0_0_20px_rgba(255,255,255,0.2)] rounded-2xl z-20"
+          style={{ left: '50%', top: '50%', width: '64%', height: '50%', transform: 'translate(-50%, -50%)' }}
+        />
       )}
 
       {/* Centre reticle with directional arrow / green pie-fill */}
