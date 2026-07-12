@@ -80,7 +80,7 @@ export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capt
   const isBg = mode === 'background' || mode == null;
   const isFg = mode === 'foreground' || mode == null;
   return (
-    <Canvas camera={{ fov: 65, position: [0, 0, 0] }} gl={{ alpha: true }}>
+    <Canvas camera={{ fov: 75, position: [0, 0, 0] }} gl={{ alpha: true }}>
       <ambientLight intensity={1.0} />
       <WorldCamera currentAim={currentAim} />
       {isBg && frames.map((frame) => (

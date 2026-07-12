@@ -8,8 +8,8 @@ import { StitchedWorld } from './StitchedWorld';
 /** 16 capture targets over the sphere: 8-dot horizon ring + 4 up + 4 down. */
 const TARGETS: { id: number; yaw: number; pitch: number }[] = [
   ...[0, 45, 90, 135, 180, 225, 270, 315].map((yaw, i) => ({ id: i, yaw, pitch: 0 })),
-  ...[0, 90, 180, 270].map((yaw, i) => ({ id: 8 + i, yaw, pitch: 42 })),
-  ...[0, 90, 180, 270].map((yaw, i) => ({ id: 12 + i, yaw, pitch: -42 })),
+  ...[45, 135, 225, 315].map((yaw, i) => ({ id: 8 + i, yaw, pitch: 35 })),
+  ...[45, 135, 225, 315].map((yaw, i) => ({ id: 12 + i, yaw, pitch: -35 })),
 ];
 
 /** Reticle sits at the centre of the camera box (upper-centre of the screen). */
