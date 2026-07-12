@@ -81,7 +81,57 @@ const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number
   );
 };
 
-export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capturedIds, mode }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame>, activeTargetId: number | null, capturedIds: Set<number>, mode?: 'background' | 'foreground' }) => {
+const LiveVideoPlane = ({ currentAim, video }: { currentAim: { yaw: number, pitch: number }, video: HTMLVideoElement | null }) => {
+  const { camera } = useThree();
+  const radius = 5.0;
+
+  const texture = useMemo(() => {
+    if (!video) return null;
+    const tex = new THREE.VideoTexture(video);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }, [video]);
+
+  useFrame(() => {
+    if (!texture || !video) return;
+    
+    const fullHeight = 2 * Math.tan(((camera as THREE.PerspectiveCamera).fov / 2) * (Math.PI / 180)) * radius;
+    const fullWidth = fullHeight * (camera as THREE.PerspectiveCamera).aspect;
+    const planeW = fullWidth * 0.75;
+    const planeH = fullHeight * 0.55;
+    
+    const planeAspect = planeW / planeH;
+    const videoAspect = video.videoWidth / video.videoHeight;
+    
+    if (video.videoWidth > 0 && video.videoHeight > 0) {
+      const scaleX = planeAspect > videoAspect ? 1 : videoAspect / planeAspect;
+      const scaleY = planeAspect > videoAspect ? planeAspect / videoAspect : 1;
+      texture.repeat.set(1 / scaleX, 1 / scaleY);
+      texture.offset.set((1 - 1 / scaleX) / 2, (1 - 1 / scaleY) / 2);
+    }
+  });
+
+  if (!texture) return null;
+
+  const yawRad = currentAim.yaw * (Math.PI / 180);
+  const pitchRad = currentAim.pitch * (Math.PI / 180);
+  const euler = new THREE.Euler(-pitchRad, -yawRad, 0, 'YXZ');
+  const pos = new THREE.Vector3(0, 0, -radius).applyEuler(euler);
+
+  const fullHeight = 2 * Math.tan(((camera as THREE.PerspectiveCamera).fov / 2) * (Math.PI / 180)) * radius;
+  const fullWidth = fullHeight * (camera as THREE.PerspectiveCamera).aspect;
+  const planeW = fullWidth * 0.75;
+  const planeH = fullHeight * 0.55;
+
+  return (
+    <mesh position={pos} rotation={euler}>
+      <planeGeometry args={[planeW, planeH]} />
+      <meshBasicMaterial map={texture} side={THREE.DoubleSide} />
+    </mesh>
+  );
+};
+
+export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capturedIds, mode, liveVideo }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame>, activeTargetId: number | null, capturedIds: Set<number>, mode?: 'background' | 'foreground', liveVideo?: HTMLVideoElement | null }) => {
   const frames = Object.values(capturedFrames);
   const isBg = mode === 'background' || mode == null;
   const isFg = mode === 'foreground' || mode == null;
@@ -92,6 +142,7 @@ export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capt
       {isBg && frames.map((frame) => (
         <ProjectedFrame key={frame.targetId} frame={frame} />
       ))}
+      {isBg && <LiveVideoPlane currentAim={currentAim} video={liveVideo ?? null} />}
       {isFg && <TargetSpheres activeTargetId={activeTargetId} capturedIds={capturedIds} />}
     </Canvas>
   );

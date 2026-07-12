@@ -70,8 +70,8 @@ export const CaptureViewport: React.FC = () => {
       const video = videoRef.current;
       const vw = video.videoWidth;
       const vh = video.videoHeight;
-      const cw = video.clientWidth;
-      const ch = video.clientHeight;
+      const cw = window.innerWidth * 0.75;
+      const ch = window.innerHeight * 0.55;
 
       if (!vw || !vh || !cw || !ch) return;
 
@@ -260,18 +260,14 @@ export const CaptureViewport: React.FC = () => {
             activeTargetId={null}
             capturedIds={new Set(Object.keys(capturedRef.current).map(Number))}
             mode="background"
+            liveVideo={videoRef.current}
           />
         </div>
       )}
 
-      {/* LAYER 1: Live Video Window */}
+      {/* LAYER 1: Hidden Video Source */}
       {started && (
-        <div
-          className="absolute z-10 overflow-hidden bg-black"
-          style={{ left: '50%', top: '50%', width: '75%', height: '55%', transform: 'translate(-50%, -50%)' }}
-        >
-          <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
-        </div>
+        <video ref={videoRef} className="hidden" playsInline muted autoPlay />
       )}
 
       {/* LAYER 2: White Viewfinder Border */}
