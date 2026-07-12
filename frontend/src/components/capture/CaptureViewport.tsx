@@ -106,10 +106,6 @@ export const CaptureViewport: React.FC = () => {
         .getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } }, audio: false })
         .catch(() => navigator.mediaDevices.getUserMedia({ video: true, audio: false }));
       streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play().catch(() => undefined);
-      }
       const D = window.DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> };
       if (typeof D?.requestPermission === 'function') {
         try {
@@ -123,6 +119,14 @@ export const CaptureViewport: React.FC = () => {
       setError(`Could not access the camera: ${(err as Error).message}`);
     }
   }, []);
+
+  // Attach stream once the video element is mounted
+  useEffect(() => {
+    if (started && videoRef.current && streamRef.current && !videoRef.current.srcObject) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => undefined);
+    }
+  }, [started]);
 
   useEffect(() => {
     if (!started) return;
