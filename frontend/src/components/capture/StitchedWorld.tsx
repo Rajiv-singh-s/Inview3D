@@ -56,7 +56,34 @@ const WorldCamera = ({ currentAim }: { currentAim: { yaw: number, pitch: number 
   return null;
 };
 
-export const StitchedWorld = ({ currentAim, capturedFrames }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame> }) => {
+import { Html } from '@react-three/drei';
+import { TARGETS } from '@/engine/SphereTargets';
+
+const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number | null, capturedIds: Set<number> }) => {
+  return (
+    <>
+      {TARGETS.map((target) => {
+        const isCaptured = capturedIds.has(target.id);
+        const isActive = activeTargetId === target.id;
+        
+        if (isCaptured) return null; // Hide captured dots entirely
+        
+        const position = targetToWorldPos(target.yaw, target.pitch, 4.9);
+        
+        return (
+          <Html key={target.id} position={position} center style={{ zIndex: 20 }}>
+            <div 
+              className={`rounded-full transition-all duration-200 ${isActive ? 'bg-blue-500 w-7 h-7 shadow-[0_0_15px_rgba(59,130,246,0.8)]' : 'bg-green-500 w-5 h-5'}`} 
+              style={{ opacity: 0.9, border: '2px solid white' }} 
+            />
+          </Html>
+        );
+      })}
+    </>
+  );
+};
+
+export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capturedIds }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame>, activeTargetId: number | null, capturedIds: Set<number> }) => {
   const frames = Object.values(capturedFrames);
   return (
     <Canvas camera={{ fov: 65, position: [0, 0, 0] }}>
@@ -66,6 +93,7 @@ export const StitchedWorld = ({ currentAim, capturedFrames }: { currentAim: { ya
       {frames.map((frame) => (
         <ProjectedFrame key={frame.targetId} frame={frame} />
       ))}
+      <TargetSpheres activeTargetId={activeTargetId} capturedIds={capturedIds} />
     </Canvas>
   );
 };

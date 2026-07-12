@@ -181,20 +181,6 @@ export const CaptureViewport: React.FC = () => {
 
   useEffect(() => () => streamRef.current?.getTracks().forEach((t) => t.stop()), []);
 
-  // project uncaptured targets within the cone onto the screen
-  const dots = useMemo(() => {
-    if (!hasCompass) return [];
-    return TARGETS.flatMap((t) => {
-      if (capturedRef.current[t.id]) return [];
-      const dYaw = angleDelta(aim.yaw, t.yaw);
-      const dPitch = t.pitch - aim.pitch;
-      if (Math.abs(dYaw) > VISIBLE_CONE || Math.abs(dPitch) > VISIBLE_CONE) return [];
-      const x = Math.max(2, Math.min(98, RETICLE_X + dYaw * KX));
-      const y = Math.max(6, Math.min(92, RETICLE_Y - dPitch * KY));
-      return [{ id: t.id, x, y }];
-    });
-  }, [aim, hasCompass, count]);
-
   const aligned = dwell > 0;
   // arrow angle from reticle toward the nearest target's projected position
   const arrowDeg =
@@ -220,12 +206,14 @@ export const CaptureViewport: React.FC = () => {
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black touch-none select-none">
-      {/* LAYER 0: The 3D AR Background of captured photos */}
+      {/* LAYER 0: The 3D AR Background of captured photos and Target Dots */}
       {started && (
         <div className="absolute inset-0 z-0">
           <StitchedWorld 
             currentAim={aim} 
             capturedFrames={store.capturedFrames} 
+            activeTargetId={nearest?.id ?? null}
+            capturedIds={new Set(Object.keys(capturedRef.current).map(Number))}
           />
         </div>
       )}
@@ -245,37 +233,21 @@ export const CaptureViewport: React.FC = () => {
         </div>
       )}
 
-      {/* Camera box (upper-centre, bordered) */}
+      {/* Camera box (centered, bordered) */}
       {started && (
         <div
-          className="absolute overflow-hidden border-2 border-white/80 z-10 bg-black"
-          style={{ left: '50%', top: '20%', width: '64%', height: '50%', transform: 'translateX(-50%)' }}
+          className="absolute overflow-hidden border-[3px] border-white/80 shadow-[0_0_20px_rgba(255,255,255,0.2)] rounded-2xl z-10 bg-transparent"
+          style={{ left: '50%', top: '50%', width: '64%', height: '50%', transform: 'translate(-50%, -50%)' }}
         >
           <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
         </div>
       )}
 
-      {/* Floating target dots (over the whole screen) */}
-      {started &&
-        dots.map((d) => (
-          <div
-            key={d.id}
-            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-green-500 transition-all duration-75 z-20"
-            style={{
-              left: `${d.x}%`,
-              top: `${d.y}%`,
-              width: d.id === nearest?.id ? 26 : 20,
-              height: d.id === nearest?.id ? 26 : 20,
-              boxShadow: d.id === nearest?.id ? '0 0 10px rgba(34,197,94,0.7)' : 'none',
-            }}
-          />
-        ))}
-
       {/* Centre reticle with directional arrow / green pie-fill */}
       {started && (
         <div
           className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-30"
-          style={{ left: `${RETICLE_X}%`, top: `${RETICLE_Y}%` }}
+          style={{ left: '50%', top: '50%' }}
         >
           <div className={`relative grid h-16 w-16 place-items-center rounded-full border-2 ${aligned ? 'border-green-400 bg-green-500/25' : 'border-white/80'}`}>
             <div className={`h-2.5 w-2.5 rounded-full ${aligned ? 'bg-green-400' : 'bg-white/80'}`} />
