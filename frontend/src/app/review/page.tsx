@@ -22,14 +22,16 @@ export default function ReviewPage() {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           try {
-            const res = await fetch(\`https://nominatim.openstreetmap.org/reverse?format=json&lat=\${position.coords.latitude}&lon=\${position.coords.longitude}\`);
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
             const data = await res.json();
             
             const city = data.address?.city || data.address?.town || data.address?.village || data.address?.county || '';
             const country = data.address?.country || '';
             
             if (city && country) {
-              setLocationName(\`\${city}, \${country}\`);
+              setLocationName(`${city}, ${country}`);
             } else {
               setLocationName('Location found');
             }
@@ -58,7 +60,7 @@ export default function ReviewPage() {
               <div key={i} className="aspect-[4/3] relative rounded-xl overflow-hidden bg-gray-200">
                 <Image 
                   src={frame.thumbnailUrl} 
-                  alt={\`Source \${i + 1}\`} 
+                  alt={`Source ${i + 1}`} 
                   fill 
                   className="object-cover"
                 />
