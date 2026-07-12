@@ -67,7 +67,7 @@ const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number
         
         return (
           <Html key={target.id} position={position} center style={{ zIndex: 30 }}>
-            <div className="rounded-full transition-all duration-200 bg-[#22c55e] w-[22px] h-[22px] shadow-sm shadow-black/50" />
+            <div className="rounded-full bg-[#16a34a] w-[44px] h-[44px] opacity-90 drop-shadow-md" />
           </Html>
         );
       })}

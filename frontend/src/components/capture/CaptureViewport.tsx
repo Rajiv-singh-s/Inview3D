@@ -243,7 +243,7 @@ export const CaptureViewport: React.FC = () => {
       {started && (
         <div
           className="absolute z-10 overflow-hidden bg-black"
-          style={{ left: '50%', top: '50%', width: '64%', height: '50%', transform: 'translate(-50%, -50%)' }}
+          style={{ left: '50%', top: '50%', width: '75%', height: '55%', transform: 'translate(-50%, -50%)' }}
         >
           <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
         </div>
@@ -252,8 +252,8 @@ export const CaptureViewport: React.FC = () => {
       {/* LAYER 2: White Viewfinder Border */}
       {started && (
         <div
-          className="pointer-events-none absolute z-20 border-[2px] border-white/90"
-          style={{ left: '50%', top: '50%', width: '64%', height: '50%', transform: 'translate(-50%, -50%)' }}
+          className="pointer-events-none absolute z-20 border-[1.5px] border-white/80"
+          style={{ left: '50%', top: '50%', width: '75%', height: '55%', transform: 'translate(-50%, -50%)' }}
         />
       )}
 
@@ -278,32 +278,25 @@ export const CaptureViewport: React.FC = () => {
             className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-40"
             style={{ left: '50%', top: '50%' }}
           >
-            <div className="relative grid h-[70px] w-[70px] place-items-center rounded-full border-[3px] border-white shadow-lg shadow-black/50">
+            <div className="relative grid h-[70px] w-[70px] place-items-center rounded-full border-[3px] border-white drop-shadow-md">
               {aligned && (
-                <svg className="absolute inset-0 h-full w-full -rotate-90 scale-90" viewBox="0 0 36 36">
-                  <path fill="#22c55e"
-                    strokeDasharray={`${dwell * 100}, 100`}
-                    d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                    stroke="none"
-                  />
-                  <circle cx="18" cy="18" r="15.9155" fill="none" stroke="#22c55e" strokeWidth="4" strokeDasharray={`${dwell * 100}, 100`} />
+                <svg className="absolute inset-0 h-full w-full -rotate-90 scale-[0.8]" viewBox="0 0 32 32">
+                  <circle r="16" cx="16" cy="16" fill="transparent" stroke="#16a34a" strokeWidth="32" strokeDasharray={`${(dwell * 100.53).toFixed(2)} 100.53`} />
                 </svg>
               )}
-              {arrowDeg != null && (
-                <div className="absolute" style={{ transform: `rotate(${arrowDeg}deg) translateX(45px)` }}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-md">
-                    <path d="M9 18l6-6-6-6" />
-                  </svg>
+              {arrowDeg != null && !aligned && (
+                <div className="absolute inset-0 flex items-center justify-center" style={{ transform: `rotate(${arrowDeg}deg)` }}>
+                  <div className="absolute w-[80px] h-[80px] border-r-[4px] border-b-[4px] border-white rounded-br-sm opacity-90 shadow-sm" style={{ transform: 'translateX(20px)' }} />
                 </div>
               )}
             </div>
           </div>
 
           {/* Capture flash */}
-          <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100 z-50" style={{ opacity: flash ? 0.7 : 0 }} />
+          <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-75 z-50" style={{ opacity: flash ? 0.8 : 0 }} />
 
           {/* Top HUD */}
-          <div className="absolute inset-x-0 top-0 flex items-center justify-between p-6 pt-10 z-50">
+          <div className="absolute inset-x-0 top-0 flex items-center justify-between p-6 pt-12 z-50">
             <button
               onClick={() => {
                 const ids = Object.keys(capturedRef.current).map(Number).sort((a, b) => b - a);
@@ -313,7 +306,7 @@ export const CaptureViewport: React.FC = () => {
                   setCount(Object.keys(capturedRef.current).length);
                 }
               }}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-black drop-shadow-md"
+              className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-white text-black drop-shadow-md"
               aria-label="Undo"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
@@ -323,29 +316,32 @@ export const CaptureViewport: React.FC = () => {
                 store.resetCapture();
                 router.push('/');
               }}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500 text-white drop-shadow-md"
+              className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-[#ef4444] text-white drop-shadow-md"
               aria-label="Cancel"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </div>
 
-          {/* Bottom HUD */}
-          <div className="absolute inset-x-0 bottom-0 z-50 pb-8 px-6 flex flex-col items-center justify-end h-40">
-            <p className="text-center text-[15px] text-white/90 mb-8 max-w-sm drop-shadow-md leading-snug">
-              Shoot all photos from the same spot as your initial photo to ensure an optimal result.
-            </p>
-            <div className="flex items-center gap-3 w-full max-w-sm">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/20">
-                <div className="h-full rounded-full bg-green-500 transition-all duration-300" style={{ width: `${(count / 16) * 100}%` }} />
-              </div>
-              <span className="text-[13px] font-bold text-white tabular-nums w-12 text-right">{count} of 16</span>
-            </div>
-            {!hasCompass && (
-              <p className="text-center text-[11px] text-white/50 mt-4">
-                No motion sensor detected — the dots need a phone gyroscope.
+          {/* Bottom HUD - 100% clone of reference video */}
+          <div className="absolute inset-x-0 bottom-0 z-50 flex flex-col">
+            <div className="px-8 pb-10 flex flex-col items-center">
+              <p className="text-center text-[14px] text-white/90 drop-shadow-md leading-relaxed">
+                Shoot all photos from the same spot as your initial photo to ensure an optimal result.
               </p>
-            )}
+              {!hasCompass && (
+                <p className="text-center text-[11px] text-white/50 mt-2">
+                  No motion sensor detected.
+                </p>
+              )}
+            </div>
+            
+            <div className="w-full relative h-[6px] bg-white/20">
+              <div className="absolute right-3 -top-6 text-[13px] font-bold text-white drop-shadow-md">
+                {count} of 16
+              </div>
+              <div className="h-full bg-[#16a34a] transition-all duration-200" style={{ width: `${(count / 16) * 100}%` }} />
+            </div>
           </div>
         </>
       )}
