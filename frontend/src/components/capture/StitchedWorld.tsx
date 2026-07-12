@@ -18,24 +18,61 @@ const ProjectedFrame = ({ frame }: { frame: CapturedFrame }) => {
     }
   }, [frame.thumbnailUrl]);
 
-  const radius = 5.0;
-  const pos = targetToWorldPos(frame.pose?.yaw || 0, frame.pose?.pitch || 0, radius);
-
   // Calculate full screen world height/width at this radius
-  const fullHeight = 2 * Math.tan((camera.fov / 2) * (Math.PI / 180)) * radius;
-  const fullWidth = fullHeight * camera.aspect;
+  // For a CUBICLE projection, we want the walls to be flat.
+  // We project the yaw/pitch ray onto a cube of size 10x10x10 (radius 5).
+  // The camera is at 0,0,0.
+  const ray = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(-frame.pose.pitch * (Math.PI/180), -frame.pose.yaw * (Math.PI/180), 0, 'YXZ'));
+  
+  // Find intersection with box bounds [-5, 5]
+  let t = 5;
+  if (Math.abs(ray.x) > 0.001) t = Math.min(t, 5 / Math.abs(ray.x));
+  if (Math.abs(ray.y) > 0.001) t = Math.min(t, 5 / Math.abs(ray.y));
+  if (Math.abs(ray.z) > 0.001) t = Math.min(t, 5 / Math.abs(ray.z));
+  
+  const cubePos = ray.clone().multiplyScalar(t);
+  
+  // To keep the wall perfectly flat, the plane must face exactly along the major axis of the wall it hit.
+  const isXWall = Math.abs(Math.abs(cubePos.x) - 5) < 0.01;
+  const isYWall = Math.abs(Math.abs(cubePos.y) - 5) < 0.01;
+  const isZWall = Math.abs(Math.abs(cubePos.z) - 5) < 0.01;
+  
+  const wallEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  if (isXWall) wallEuler.y = cubePos.x > 0 ? Math.PI / 2 : -Math.PI / 2;
+  else if (isYWall) wallEuler.x = cubePos.y > 0 ? -Math.PI / 2 : Math.PI / 2;
+  else wallEuler.y = cubePos.z > 0 ? Math.PI : 0;
 
-  // The viewfinder white box is 75% width and 55% height of the screen.
-  // The captured photo is exactly cropped to this viewfinder.
-  // Therefore, the plane MUST perfectly match these exact proportions to stitch seamlessly!
-  const height = fullHeight * 0.55;
-  const width = fullWidth * 0.75;
+  // The size of the plane needs to scale up based on the distance to avoid gaps on the corners.
+  // Standard fullHeight at distance 5 is:
+  const baseHeight = 2 * Math.tan((camera.fov / 2) * (Math.PI / 180)) * 5;
+  const baseWidth = baseHeight * camera.aspect;
+  
+  // Scale by the actual intersection distance 't' to fill the perspective accurately
+  const scale = t / 5;
+  const height = baseHeight * 0.55 * scale;
+  const width = baseWidth * 0.75 * scale;
 
   return (
-    <mesh position={pos} onUpdate={(self) => self.lookAt(0, 0, 0)}>
+    <mesh position={cubePos} rotation={wallEuler}>
       <planeGeometry args={[width, height]} />
       {texture ? (
-        <meshBasicMaterial map={texture} side={THREE.DoubleSide} transparent opacity={0.9} />
+        <meshBasicMaterial 
+          map={texture} 
+          side={THREE.DoubleSide} 
+          transparent 
+          opacity={1.0}
+          onBeforeCompile={(shader) => {
+            shader.fragmentShader = shader.fragmentShader.replace(
+              '#include <map_fragment>',
+              `
+              #include <map_fragment>
+              float edgeX = smoothstep(0.0, 0.15, vMapUv.x) * smoothstep(1.0, 0.85, vMapUv.x);
+              float edgeY = smoothstep(0.0, 0.15, vMapUv.y) * smoothstep(1.0, 0.85, vMapUv.y);
+              diffuseColor.a *= edgeX * edgeY;
+              `
+            );
+          }}
+        />
       ) : (
         <meshBasicMaterial color="#222" side={THREE.DoubleSide} transparent opacity={0.5} />
       )}
@@ -66,14 +103,22 @@ const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number
     <>
       {TARGETS.map((target) => {
         const isCaptured = capturedIds.has(target.id);
+        const isActive = target.id === activeTargetId;
         
         if (isCaptured) return null; // Hide captured dots entirely
         
-        const position = targetToWorldPos(target.yaw, target.pitch, 4.9);
+        // For Cubicle projection, map the dots to the cube walls too
+        const ray = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(-target.pitch * (Math.PI/180), -target.yaw * (Math.PI/180), 0, 'YXZ'));
+        let t = 4.9; // Slightly in front of the wall
+        if (Math.abs(ray.x) > 0.001) t = Math.min(t, 4.9 / Math.abs(ray.x));
+        if (Math.abs(ray.y) > 0.001) t = Math.min(t, 4.9 / Math.abs(ray.y));
+        if (Math.abs(ray.z) > 0.001) t = Math.min(t, 4.9 / Math.abs(ray.z));
+        
+        const position = ray.clone().multiplyScalar(t);
         
         return (
           <Html key={target.id} position={position} center style={{ zIndex: 30 }}>
-            <div className="rounded-full bg-[#16a34a] w-[44px] h-[44px] opacity-90 drop-shadow-md" />
+            <div className={`rounded-full bg-[#16a34a] opacity-90 drop-shadow-md transition-all duration-300 ${isActive ? 'w-[64px] h-[64px]' : 'w-[24px] h-[24px]'}`} />
           </Html>
         );
       })}

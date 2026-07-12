@@ -62,6 +62,30 @@ export const CaptureViewport: React.FC = () => {
   const [flash, setFlash] = useState(false);
   const [count, setCount] = useState(0);
 
+  // Find nearest uncaptured dot for the hint arrow
+  const getNearestDotAngle = () => {
+    let nearestDist = Infinity;
+    let nearestAngle = 0;
+    TARGETS.forEach(t => {
+      if (!capturedRef.current[t.id]) {
+        // Simple 2D angle difference for hint direction
+        const dy = t.pitch - aim.pitch;
+        const dx = t.yaw - aim.yaw;
+        // Handle wrap-around
+        let wrapDx = dx;
+        if (wrapDx > 180) wrapDx -= 360;
+        if (wrapDx < -180) wrapDx += 360;
+        
+        const dist = Math.sqrt(wrapDx * wrapDx + dy * dy);
+        if (dist < nearestDist && dist > 5) { // don't point if we are very close
+          nearestDist = dist;
+          nearestAngle = Math.atan2(dy, wrapDx) * (180 / Math.PI);
+        }
+      }
+    });
+    return -nearestAngle; // Invert for screen rotation
+  };
+
   const capture = useCallback(
     (targetId: number) => {
       if (!videoRef.current || capturingRef.current) return;
@@ -96,6 +120,10 @@ export const CaptureViewport: React.FC = () => {
         ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
       }
       
+      // Trigger flash
+      setFlash(true);
+      setTimeout(() => setFlash(false), 150);
+
       const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
       const thumb = canvas.toDataURL('image/jpeg', 0.5);
       canvas.toBlob(
@@ -299,25 +327,33 @@ export const CaptureViewport: React.FC = () => {
             className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-40"
             style={{ left: '50%', top: '50%' }}
           >
+            {/* Rotating Hint Arrow */}
+            {arrowDeg != null && !aligned && (
+              <div 
+                className="absolute left-1/2 top-1/2 w-16 h-16 -translate-x-1/2 -translate-y-1/2 transition-transform duration-300"
+                style={{ transform: `translate(-50%, -50%) rotate(${arrowDeg}deg)` }}
+              >
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-full text-white font-bold text-xl drop-shadow-md">
+                  ┘
+                </div>
+              </div>
+            )}
             <div className="relative grid h-[70px] w-[70px] place-items-center rounded-full border-[3px] border-white drop-shadow-md">
               {aligned && (
                 <svg className="absolute inset-0 h-full w-full -rotate-90 scale-[0.8]" viewBox="0 0 32 32">
                   <circle r="16" cx="16" cy="16" fill="transparent" stroke="#16a34a" strokeWidth="32" strokeDasharray={`${(dwell * 100.53).toFixed(2)} 100.53`} />
                 </svg>
               )}
-              {arrowDeg != null && !aligned && (
-                <div className="absolute inset-0 flex items-center justify-center" style={{ transform: `rotate(${arrowDeg}deg)` }}>
-                  <div className="absolute w-[80px] h-[80px] border-r-[4px] border-b-[4px] border-white rounded-br-sm opacity-90 shadow-sm" style={{ transform: 'translateX(20px)' }} />
-                </div>
-              )}
             </div>
           </div>
 
           {/* Capture flash */}
-          <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-75 z-50" style={{ opacity: flash ? 0.8 : 0 }} />
+          {flash && (
+            <div className="absolute z-40 bg-white" style={{ left: '50%', top: '50%', width: '75%', height: '55%', transform: 'translate(-50%, -50%)' }} />
+          )}
 
           {/* Top HUD */}
-          <div className="absolute inset-x-0 top-0 flex items-center justify-between p-6 pt-12 z-50">
+          <div className="absolute top-8 left-6 right-6 z-40 flex justify-between items-center pointer-events-none">
             <button
               onClick={() => {
                 const ids = Object.keys(capturedRef.current).map(Number).sort((a, b) => b - a);
@@ -327,7 +363,7 @@ export const CaptureViewport: React.FC = () => {
                   setCount(Object.keys(capturedRef.current).length);
                 }
               }}
-              className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-white text-black drop-shadow-md"
+              className="w-10 h-10 rounded-full bg-black/50 flex items-center justify-center pointer-events-auto text-white"
               aria-label="Undo"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
@@ -337,31 +373,27 @@ export const CaptureViewport: React.FC = () => {
                 store.resetCapture();
                 router.push('/');
               }}
-              className="flex h-[36px] w-[36px] items-center justify-center rounded-full bg-[#ef4444] text-white drop-shadow-md"
+              className="w-10 h-10 rounded-full bg-red-600 flex items-center justify-center pointer-events-auto text-white"
               aria-label="Cancel"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </div>
 
-          {/* Bottom HUD - 100% clone of reference video */}
-          <div className="absolute inset-x-0 bottom-0 z-50 flex flex-col">
-            <div className="px-8 pb-10 flex flex-col items-center">
-              <p className="text-center text-[14px] text-white/90 drop-shadow-md leading-relaxed">
-                Shoot all photos from the same spot as your initial photo to ensure an optimal result.
-              </p>
-              {!hasCompass && (
-                <p className="text-center text-[11px] text-white/50 mt-2">
-                  No motion sensor detected.
-                </p>
-              )}
+          {/* Bottom HUD */}
+          <div className="absolute bottom-6 left-0 right-0 z-40 flex flex-col items-center">
+            <div className="text-white text-[15px] font-medium tracking-wide mb-6 text-center px-8 drop-shadow-md">
+              Shoot all photos from the same spot as your<br/>initial photo to ensure an optimal result.
             </div>
             
             <div className="w-full relative h-[6px] bg-white/20">
-              <div className="absolute right-3 -top-6 text-[13px] font-bold text-white drop-shadow-md">
+              <div 
+                className="absolute left-0 top-0 bottom-0 bg-[#22c55e] transition-all duration-500 ease-out"
+                style={{ width: `${(count / 16) * 100}%` }}
+              />
+              <div className="absolute right-4 -top-8 text-white font-medium text-sm drop-shadow-md">
                 {count} of 16
               </div>
-              <div className="h-full bg-[#16a34a] transition-all duration-200" style={{ width: `${(count / 16) * 100}%` }} />
             </div>
           </div>
         </>
