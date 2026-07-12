@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCaptureStore } from '@/store/captureStore';
+import { StitchedWorld } from './StitchedWorld';
 
 /** 16 capture targets over the sphere: 8-dot horizon ring + 4 up + 4 down. */
 const TARGETS: { id: number; yaw: number; pitch: number }[] = [
