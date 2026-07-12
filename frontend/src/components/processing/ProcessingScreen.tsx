@@ -6,8 +6,9 @@ import { SphericalPreview } from './SphericalPreview';
 export interface ProcessingScreenProps {
   /** The processing progress (0 to 100) */
   progress: number;
-  /** Text description of the current processing step */
+  /** Text description of the current processing step (ignored, using fixed text to match video) */
   statusText?: string;
+  onBack?: () => void;
 }
 
 /**
@@ -15,31 +16,39 @@ export interface ProcessingScreenProps {
  */
 export const ProcessingScreen: React.FC<ProcessingScreenProps> = ({ 
   progress, 
-  statusText = 'Processing your scan...' 
+  onBack 
 }) => {
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 text-slate-100 p-6 z-50">
-      
-      <div className="mb-10 relative">
-        <SphericalPreview />
-        
-        {/* Pulsing ring overlay */}
-        <div className="absolute inset-0 rounded-full border border-blue-500/50 animate-ping shadow-[0_0_15px_rgba(59,130,246,0.6)]" />
+    <div className="flex flex-col bg-black text-slate-100 min-h-screen z-50">
+      {/* Header */}
+      <div className="flex items-center p-5 pt-8">
+        <button 
+          onClick={onBack}
+          className="text-white hover:text-slate-300 transition-colors"
+          aria-label="Back"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <span className="ml-2 text-lg font-bold">Iriomote</span>
       </div>
-      
-      <h2 className="text-xl font-bold mb-2 tracking-wide text-center">{statusText}</h2>
-      <p className="text-slate-400 text-sm mb-8 text-center">This may take a few moments...</p>
 
-      {/* Linear Progress Bar */}
-      <div className="w-full max-w-sm h-3 bg-white/10 rounded-full overflow-hidden backdrop-blur-sm border border-white/5 relative">
-        <div 
-          className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-[800ms] ease-out"
-          style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-        />
-      </div>
-      
-      <div className="mt-4 text-xs font-mono text-slate-500">
-        {Math.round(progress)}%
+      <div className="flex flex-col items-center justify-center flex-1 p-6 pb-32">
+        <div className="mb-12 relative w-56 h-56 rounded-full overflow-hidden">
+          <SphericalPreview />
+        </div>
+        
+        <h2 className="text-[19px] font-bold mb-3 tracking-wide text-center">Generating 3D World</h2>
+        <p className="text-[#a1a1aa] text-[13px] mb-6 text-center max-w-[260px] leading-relaxed">
+          This will take about 5 minutes — feel free to leave the app and come back.
+        </p>
+
+        {/* Linear Progress Bar */}
+        <div className="w-full max-w-[200px] h-1 bg-white/20 rounded-full overflow-hidden">
+          <div 
+            className="h-full bg-white transition-all duration-[800ms] ease-out"
+            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+          />
+        </div>
       </div>
     </div>
   );

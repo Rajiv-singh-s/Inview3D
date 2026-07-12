@@ -42,23 +42,20 @@ export const ReviewDashboard: React.FC<ReviewDashboardProps> = ({ onPost, onBack
 
       {/* Image Grid */}
       <div className="flex flex-col space-y-3">
-        <h2 className="text-xs text-slate-400 uppercase tracking-wider font-semibold">
+        <h2 className="text-[15px] font-bold text-white">
           Source images ({frameCount})
         </h2>
         
         {frameCount > 0 ? (
-          <div className="grid grid-cols-4 gap-2">
+          <div className="flex overflow-x-auto gap-3 pb-2 snap-x hide-scrollbar">
             {frames.map((frame, idx) => (
-              <div key={frame.targetId} className="relative aspect-square rounded-xl overflow-hidden bg-slate-800/50 border border-white/10 shadow-sm">
+              <div key={frame.targetId} className="relative flex-none w-36 h-36 rounded-xl overflow-hidden bg-slate-800/50 border border-white/10 shadow-sm snap-start">
                 {frame.thumbnailUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={frame.thumbnailUrl} alt={`Frame ${idx + 1}`} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500 bg-white/5 text-center p-1">No Image</div>
                 )}
-                <div className="absolute top-1 right-1 bg-black/70 backdrop-blur-md rounded-full px-1.5 py-0.5 text-[10px] font-mono border border-white/20 text-white shadow-sm">
-                  {idx + 1}
-                </div>
               </div>
             ))}
           </div>
@@ -69,25 +66,33 @@ export const ReviewDashboard: React.FC<ReviewDashboardProps> = ({ onPost, onBack
         )}
       </div>
 
-      {/* Settings Section */}
-      <div className="flex flex-col space-y-3 pt-2">
-        <h2 className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Location</h2>
+      {/* Details Section */}
+      <div className="flex flex-col space-y-4 pt-2 bg-white/5 rounded-2xl p-4 border border-white/10">
+        <h2 className="text-[15px] font-bold text-white">Details</h2>
+        
+        <PrivacyToggle isPrivate={isPrivate} onChange={setIsPrivate} />
+        
+        <div className="h-px bg-white/10 my-2" />
+        
         <GeoLocation />
       </div>
 
-      <div className="flex flex-col space-y-3 pt-2">
-        <h2 className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Privacy Settings</h2>
-        <PrivacyToggle isPrivate={isPrivate} onChange={setIsPrivate} />
-      </div>
-
       {/* Bottom Spacer & CTA */}
-      <div className="flex-1 min-h-[2rem]" />
-      <button 
-        onClick={() => onPost(isPrivate)}
-        className="w-full py-4 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold text-lg shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:from-blue-500 hover:to-indigo-500 transition-all active:scale-[0.98] border border-blue-400/20 mb-4"
-      >
-        Stitch and post
-      </button>
+      <div className="flex-1 min-h-[1rem]" />
+      <div className="flex flex-col space-y-3 pb-4">
+        <button 
+          onClick={() => onPost(isPrivate)}
+          className="w-full py-4 rounded-full bg-slate-100 text-black font-bold text-[17px] hover:bg-white transition-all active:scale-[0.98]"
+        >
+          Stitch and post
+        </button>
+        <button 
+          onClick={onBack}
+          className="w-full py-2 text-slate-400 font-medium text-[15px] hover:text-white transition-colors"
+        >
+          Not now
+        </button>
+      </div>
     </div>
   );
 };

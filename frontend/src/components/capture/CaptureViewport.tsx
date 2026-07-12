@@ -211,8 +211,24 @@ export const CaptureViewport: React.FC = () => {
           : 'Tilt down'
       : null;
 
+  useEffect(() => {
+    if (count >= 16) {
+      setTimeout(() => router.push('/review'), 500);
+    }
+  }, [count, router]);
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-black touch-none select-none">
+      {/* LAYER 0: The 3D AR Background of captured photos */}
+      {started && (
+        <div className="absolute inset-0 z-0">
+          <StitchedWorld 
+            currentAim={aim} 
+            capturedFrames={store.capturedFrames} 
+          />
+        </div>
+      )}
+
       {/* Start gate (also satisfies the iOS motion-permission gesture) */}
       {!started && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-slate-950 p-6 text-center text-white">
@@ -231,7 +247,7 @@ export const CaptureViewport: React.FC = () => {
       {/* Camera box (upper-centre, bordered) */}
       {started && (
         <div
-          className="absolute overflow-hidden rounded-2xl border-2 border-white/80"
+          className="absolute overflow-hidden border-2 border-white/80 z-10 bg-black"
           style={{ left: '50%', top: '20%', width: '64%', height: '50%', transform: 'translateX(-50%)' }}
         >
           <video ref={videoRef} className="h-full w-full object-cover" playsInline muted autoPlay />
@@ -243,7 +259,7 @@ export const CaptureViewport: React.FC = () => {
         dots.map((d) => (
           <div
             key={d.id}
-            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-green-500 transition-all duration-75"
+            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded-full bg-green-500 transition-all duration-75 z-20"
             style={{
               left: `${d.x}%`,
               top: `${d.y}%`,
@@ -257,7 +273,7 @@ export const CaptureViewport: React.FC = () => {
       {/* Centre reticle with directional arrow / green pie-fill */}
       {started && (
         <div
-          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+          className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-30"
           style={{ left: `${RETICLE_X}%`, top: `${RETICLE_Y}%` }}
         >
           <div className={`relative grid h-16 w-16 place-items-center rounded-full border-2 ${aligned ? 'border-green-400 bg-green-500/25' : 'border-white/80'}`}>
@@ -279,11 +295,11 @@ export const CaptureViewport: React.FC = () => {
       )}
 
       {/* Capture flash */}
-      <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100" style={{ opacity: flash ? 0.5 : 0 }} />
+      <div className="pointer-events-none absolute inset-0 bg-white transition-opacity duration-100 z-40" style={{ opacity: flash ? 0.5 : 0 }} />
 
       {/* Top HUD */}
       {started && (
-        <div className="absolute inset-x-0 top-0 flex items-center justify-between p-4">
+        <div className="absolute inset-x-0 top-0 flex items-center justify-between p-6 z-50">
           <button
             onClick={() => {
               const ids = Object.keys(capturedRef.current).map(Number).sort((a, b) => b - a);
@@ -293,40 +309,40 @@ export const CaptureViewport: React.FC = () => {
                 setCount(Object.keys(capturedRef.current).length);
               }
             }}
-            className="grid h-10 w-10 place-items-center rounded-full bg-white/85 text-lg text-slate-900"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 backdrop-blur-md text-white text-xl border border-white/30"
             aria-label="Undo"
           >
-            ↺
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
           </button>
           <button
             onClick={() => {
               store.resetCapture();
               router.push('/');
             }}
-            className="grid h-10 w-10 place-items-center rounded-full bg-red-500 text-white"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 backdrop-blur-md text-white border border-white/30"
             aria-label="Cancel"
           >
-            ✕
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
       )}
 
       {/* Bottom HUD: hint / instruction + progress */}
       {started && (
-        <div className="absolute inset-x-0 bottom-0 space-y-2 p-4 text-white">
-          <p className="text-center text-sm font-medium">
+        <div className="absolute inset-x-0 bottom-0 z-50 p-6 pt-12 bg-gradient-to-t from-black/80 via-black/40 to-transparent">
+          <p className="text-center text-[13px] font-bold text-white mb-6 tracking-wide drop-shadow-md">
             {count === 0
-              ? 'Shoot all photos from the same spot to ensure an optimal result.'
+              ? 'Shoot all photos from the same spot as your initial photo to ensure an optimal result.'
               : (hint ?? 'Hold steady…')}
           </p>
-          <div className="flex items-center gap-3">
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/25">
-              <div className="h-full rounded-full bg-green-500 transition-[width]" style={{ width: `${(count / 16) * 100}%` }} />
+          <div className="flex items-center gap-4">
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/20 backdrop-blur-md border border-white/10">
+              <div className="h-full rounded-full bg-green-500 transition-all duration-300" style={{ width: `${(count / 16) * 100}%` }} />
             </div>
-            <span className="text-sm font-semibold tabular-nums">{count} of 16</span>
+            <span className="text-[13px] font-bold text-white tabular-nums w-12 text-right">{count} of 16</span>
           </div>
           {!hasCompass && (
-            <p className="text-center text-[11px] text-white/60">
+            <p className="text-center text-[11px] text-white/60 mt-2">
               No motion sensor detected — the dots need a phone gyroscope.
             </p>
           )}

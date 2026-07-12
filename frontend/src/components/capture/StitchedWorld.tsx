@@ -21,12 +21,17 @@ const ProjectedFrame = ({ frame }: { frame: CapturedFrame }) => {
   const radius = 5.0;
   const pos = targetToWorldPos(frame.pose?.yaw || 0, frame.pose?.pitch || 0, radius);
 
+  // Calculate full screen world height/width at this radius
   const height = 2 * Math.tan((camera.fov / 2) * (Math.PI / 180)) * radius;
   const width = height * camera.aspect;
+  
+  // Scale down to match the 64% x 50% central viewfinder rectangle
+  const rectHeight = height * 0.50;
+  const rectWidth = width * 0.64;
 
   return (
     <mesh position={pos} onUpdate={(self) => self.lookAt(0, 0, 0)}>
-      <planeGeometry args={[width, height]} />
+      <planeGeometry args={[rectWidth, rectHeight]} />
       {texture ? (
         <meshBasicMaterial map={texture} side={THREE.DoubleSide} transparent opacity={1.0} />
       ) : (
@@ -51,34 +56,7 @@ const WorldCamera = ({ currentAim }: { currentAim: { yaw: number, pitch: number 
   return null;
 };
 
-import { Html } from '@react-three/drei';
-import { TARGETS } from '@/engine/SphereTargets';
-
-const TargetSpheres = ({ activeTargetId, capturedIds }: { activeTargetId: number | null, capturedIds: Set<number> }) => {
-  return (
-    <>
-      {TARGETS.map((target) => {
-        const isCaptured = capturedIds.has(target.id);
-        const isActive = activeTargetId === target.id;
-        
-        if (isCaptured) return null; // Hide captured dots entirely
-        
-        const position = targetToWorldPos(target.yaw, target.pitch, 4.9);
-        
-        return (
-          <Html key={target.id} position={position} center style={{ zIndex: 50 }}>
-            <div 
-              className={`w-12 h-12 rounded-full ${isActive ? 'bg-blue-500' : 'bg-emerald-400'}`} 
-              style={{ opacity: 0.8, border: '2px solid white', boxShadow: '0 0 10px rgba(0,0,0,0.5)' }} 
-            />
-          </Html>
-        );
-      })}
-    </>
-  );
-};
-
-export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capturedIds }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame>, activeTargetId: number | null, capturedIds: Set<number> }) => {
+export const StitchedWorld = ({ currentAim, capturedFrames }: { currentAim: { yaw: number, pitch: number }, capturedFrames: Record<number, CapturedFrame> }) => {
   const frames = Object.values(capturedFrames);
   return (
     <Canvas camera={{ fov: 65, position: [0, 0, 0] }}>
@@ -88,7 +66,6 @@ export const StitchedWorld = ({ currentAim, capturedFrames, activeTargetId, capt
       {frames.map((frame) => (
         <ProjectedFrame key={frame.targetId} frame={frame} />
       ))}
-      <TargetSpheres activeTargetId={activeTargetId} capturedIds={capturedIds} />
     </Canvas>
   );
 };

@@ -64,7 +64,7 @@ function ProcessingPageContent() {
     );
   }
 
-  return <ProcessingScreen progress={progress} statusText={statusText} />;
+  return <ProcessingScreen progress={progress} statusText={statusText} onBack={() => router.push('/')} />;
 }
 
 export default function ProcessingPage() {
